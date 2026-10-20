@@ -1,0 +1,358 @@
+name: Deploy Fraud Detection Dashboard
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - staging
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Job 1: Build and Test
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    strategy:
+      matrix:
+        service:
+          - dashboard
+          - api
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.service }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.${{ matrix.service }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test image
+        run: |
+          docker build -f Dockerfile.${{ matrix.service }} -t test-${{ matrix.service }} .
+          docker run --rm test-${{ matrix.service }} --version || echo "Image built successfully"
+
+  # Job 2: Security Scanning
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Check dependencies with safety
+        run: |
+          pip install safety
+          safety check -r requirements-dashboard.txt || true
+
+  # Job 3: Code Quality
+  quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dashboard.txt
+          pip install pylint black flake8 isort
+
+      - name: Run linting with flake8
+        run: |
+          flake8 dashboard --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 dashboard --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
+
+      - name: Check code formatting with black
+        run: black --check dashboard || true
+
+      - name: Sort imports with isort
+        run: isort --check-only dashboard || true
+
+      - name: Run pylint on critical modules
+        run: |
+          pylint dashboard/app.py dashboard/components/api_client.py dashboard/components/auth_handler.py --exit-zero || true
+
+  # Job 4: Deploy to Staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build, security, quality]
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    environment:
+      name: staging
+      url: https://staging-fraud-detection.example.com
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Staging Server
+        env:
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_KEY }}
+          DEPLOY_HOST: ${{ secrets.STAGING_HOST }}
+          DEPLOY_USER: ${{ secrets.STAGING_USER }}
+          DEPLOY_PATH: /opt/fraud-detection
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd $DEPLOY_PATH && \
+             git fetch origin && \
+             git checkout develop && \
+             docker-compose -f docker-compose.dashboard.yml pull && \
+             docker-compose -f docker-compose.dashboard.yml up -d"
+
+      - name: Run health checks
+        env:
+          STAGING_URL: https://staging-fraud-detection.example.com
+        run: |
+          curl --fail --retry 5 --retry-delay 10 \
+            "$STAGING_URL/_stcore/health" || exit 1
+          curl --fail --retry 5 --retry-delay 10 \
+            "$STAGING_URL/api/health" || exit 1
+
+      - name: Slack notification
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: 'Staging deployment ${{ job.status }}'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author
+
+  # Job 5: Deploy to Production
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, security, quality]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      url: https://fraud-detection.example.com
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create deployment
+        uses: actions/github-script@v7
+        id: deployment
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.ref,
+              environment: 'production',
+              required_contexts: [],
+              auto_merge: false
+            });
+            return deployment.data.id;
+
+      - name: Deploy to Production Server
+        env:
+          DEPLOY_KEY: ${{ secrets.PROD_DEPLOY_KEY }}
+          DEPLOY_HOST: ${{ secrets.PROD_HOST }}
+          DEPLOY_USER: ${{ secrets.PROD_USER }}
+          DEPLOY_PATH: /opt/fraud-detection
+          ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd $DEPLOY_PATH && \
+             echo '$ENV_FILE' > .env.dashboard && \
+             docker-compose -f docker-compose.dashboard.yml --profile production pull && \
+             docker-compose -f docker-compose.dashboard.yml --profile production up -d && \
+             docker-compose -f docker-compose.dashboard.yml --profile production logs --tail=50"
+
+      - name: Run production health checks
+        env:
+          PROD_URL: https://fraud-detection.example.com
+        run: |
+          curl --fail --retry 10 --retry-delay 15 \
+            "$PROD_URL/_stcore/health" || exit 1
+          curl --fail --retry 10 --retry-delay 15 \
+            "$PROD_URL/api/health" || exit 1
+
+      - name: Run smoke tests
+        env:
+          PROD_URL: https://fraud-detection.example.com
+          TEST_USER: ${{ secrets.SMOKE_TEST_USER }}
+          TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+        run: |
+          # Install dependencies
+          pip install requests pytest
+          
+          # Run smoke tests
+          pytest tests/smoke/ --tb=short --timeout=30 \
+            -v --tb=short \
+            --capture=no
+
+      - name: Update deployment status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deployment_id = ${{ steps.deployment.outputs.result }};
+            const status = '${{ job.status }}' === 'success' ? 'success' : 'failure';
+            
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment_id,
+              state: status,
+              description: 'Production deployment ' + status,
+              environment_url: 'https://fraud-detection.example.com'
+            });
+
+      - name: Slack notification
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: 'Production deployment ${{ job.status }}'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author,action,eventName
+          custom_payload: |
+            {
+              text: `Production deployment ${process.env.AS_STATUS}`,
+              blocks: [
+                {
+                  type: 'section',
+                  text: {
+                    type: 'mrkdwn',
+                    text: `*Production Deployment ${process.env.AS_STATUS}*\nCommit: ${process.env.AS_COMMIT}\nAuthor: ${process.env.AS_AUTHOR}`
+                  }
+                }
+              ]
+            }
+
+  # Job 6: Documentation
+  docs:
+    name: Generate Documentation
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Generate API documentation
+        run: |
+          pip install pdoc3
+          pdoc3 -o ./docs/api dashboard --html
+
+      - name: Build documentation site
+        run: |
+          pip install mkdocs mkdocs-material
+          mkdocs build
+
+      - name: Deploy documentation
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+
+  # Job 7: Cleanup
+  cleanup:
+    name: Cleanup
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Prune Docker images
+        run: |
+          docker system prune -f --all --volumes || true
+
+      - name: Clean build artifacts
+        run: |
+          rm -rf build dist *.egg-info .pytest_cache .coverage || true
