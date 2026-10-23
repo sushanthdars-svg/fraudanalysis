@@ -39,6 +39,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class ForwardedPrefixMiddleware:
+    """Use the reverse-proxy prefix (e.g. /backend) as root_path so the
+    Swagger UI and OpenAPI server URLs resolve correctly behind the proxy."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            for name, value in scope.get("headers", []):
+                if name == b"x-forwarded-prefix":
+                    prefix = value.decode("latin-1").rstrip("/")
+                    if prefix.startswith("/") and not scope["path"].startswith(prefix):
+                        scope = dict(scope, root_path=prefix)
+                    break
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(ForwardedPrefixMiddleware)
+
 # Health check endpoint
 @app.get("/health")
 async def health_check():

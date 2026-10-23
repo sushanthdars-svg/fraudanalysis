@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => {
           target: env.API_PROXY_TARGET || "http://127.0.0.1:8001",
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/backend/, ""),
+          headers: { "X-Forwarded-Prefix": "/backend" },
           timeout: 360000,
           proxyTimeout: 360000,
         },
