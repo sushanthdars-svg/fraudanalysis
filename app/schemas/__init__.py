@@ -2,21 +2,35 @@
 Request and response schemas using Pydantic for validation and documentation.
 """
 
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from decimal import Decimal
 from app.core.permissions import UserRole
+import re
+
+
+# Email validation that supports .local domains
+def validate_email(email: str) -> str:
+    """Validate email format, supporting .local domains for development."""
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z0-9.-]+$'
+    if not re.match(pattern, email):
+        raise ValueError('Invalid email format')
+    return email
 
 
 # ============= User Schemas =============
 
 class UserCreate(BaseModel):
     """Schema for creating a new user."""
-    email: EmailStr = Field(..., description="User email address")
+    email: str = Field(..., description="User email address")
     full_name: str = Field(..., min_length=1, max_length=255, description="User's full name")
     password: str = Field(..., min_length=8, description="User password (minimum 8 characters)")
     role: UserRole = Field(default=UserRole.ANALYST, description="User role")
+    
+    @field_validator('email')
+    def validate_email_field(cls, v):
+        return validate_email(v)
 
 
 class UserUpdate(BaseModel):
@@ -43,15 +57,23 @@ class UserResponse(BaseModel):
 
 class LoginRequest(BaseModel):
     """Schema for login request."""
-    email: EmailStr = Field(..., description="User email")
+    email: str = Field(..., description="User email")
     password: str = Field(..., description="User password")
+    
+    @field_validator('email')
+    def validate_email_field(cls, v):
+        return validate_email(v)
 
 
 class UserRegistrationRequest(BaseModel):
     """Public registration schema; callers cannot assign their own role."""
-    email: EmailStr
+    email: str
     full_name: str = Field(..., min_length=1, max_length=255)
     password: str = Field(..., min_length=8, max_length=128)
+    
+    @field_validator('email')
+    def validate_email_field(cls, v):
+        return validate_email(v)
 
     model_config = {"extra": "forbid"}
 
