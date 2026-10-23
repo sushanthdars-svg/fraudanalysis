@@ -99,7 +99,7 @@ nav a.active svg { color: #60a5fa; }
 .workspace-status { font-size: 11px; color: #6b7280; display: flex; gap: 8px; align-items: center; }
 .workspace-status strong { color: #10b981; font-weight: 600; }
 .main-content { width: 100%; max-width: 1680px; padding: 40px 40px 50px; margin: 0 auto; flex: 1; }
-.footer { display: flex; align-items: center; justify-content: space-between; padding: 24px 40px 32px; color: #6b7280; font-size: 12px; border-top: 1px solid var(--border); } justify-content: space-between; gap: 15px; padding: 20px 36px; border-top: 1px solid var(--border); color: #7a8fa3; font-size: 9px; letter-spacing: .4px; }
+.footer { display: flex; align-items: center; justify-content: space-between; padding: 24px 40px 32px; color: #6b7280; font-size: 12px; border-top: 1px solid var(--border); gap: 15px; color: #7a8fa3; letter-spacing: .4px; }
 .page-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 32px; }
 .eyebrow { font-size: 10px; letter-spacing: 1.2px; font-weight: 700; color: var(--cyan); text-transform: uppercase; margin-bottom: 12px; }
 .page-heading p { font-size: 14px; margin-top: 8px; color: var(--muted); }

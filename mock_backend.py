@@ -105,6 +105,12 @@ class CreateTeamMemberRequest(BaseModel):
     password: str
     role: str = "viewer"
 
+class CreateTeamMemberRequest(BaseModel):
+    full_name: str
+    email: str
+    password: str
+    role: str = "viewer"
+
 # Mock data store
 MOCK_USERS = {
     "admin@fraud-detection.local": {
@@ -344,34 +350,52 @@ async def get_models():
     """Get ML models list including trained models."""
     default_models = [
         {
-            "id": 1,
-            "name": "Gradient Boosting Model",
-            "type": "classification",
-            "accuracy": 0.972,
-            "precision": 0.95,
-            "recall": 0.91,
-            "f1_score": 0.93,
-            "status": "active",
-            "deployed_date": "2024-01-15",
-            "version": "2.1.0"
+            "id": "default_1",
+            "name": "gradient_boosting",
+            "version": "2.1.0",
+            "training_date": "2024-01-15T00:00:00",
+            "data_source": "database",
+            "dataset_size": 50000,
+            "total_samples": 100000,
+            "evaluation_only": False,
+            "feature_names": ["velocity_score", "amount_zscore", "device_entropy", "ip_reputation", "account_age_days", "auth_fail_count", "timezone_delta", "merchant_category_shift"],
+            "metrics": {
+                "accuracy": 0.972,
+                "precision": 0.95,
+                "recall": 0.91,
+                "f1_score": 0.93,
+                "roc_auc": 0.978,
+                "confusion_matrix": {"true_positive": 910, "false_positive": 47, "true_negative": 19950, "false_negative": 93}
+            },
+            "cv_mean": 0.91,
+            "feature_importance": [0.28, 0.22, 0.18, 0.15, 0.10, 0.04, 0.02, 0.01]
         },
         {
-            "id": 2,
-            "name": "Random Forest Model",
-            "type": "classification",
-            "accuracy": 0.948,
-            "precision": 0.92,
-            "recall": 0.87,
-            "f1_score": 0.89,
-            "status": "active",
-            "deployed_date": "2023-11-20",
-            "version": "1.8.0"
+            "id": "default_2",
+            "name": "random_forest",
+            "version": "1.8.0",
+            "training_date": "2023-11-20T00:00:00",
+            "data_source": "database",
+            "dataset_size": 45000,
+            "total_samples": 90000,
+            "evaluation_only": False,
+            "feature_names": ["velocity_score", "amount_zscore", "device_entropy", "ip_reputation", "account_age_days", "auth_fail_count", "timezone_delta", "merchant_category_shift"],
+            "metrics": {
+                "accuracy": 0.948,
+                "precision": 0.92,
+                "recall": 0.87,
+                "f1_score": 0.89,
+                "roc_auc": 0.955,
+                "confusion_matrix": {"true_positive": 870, "false_positive": 73, "true_negative": 19850, "false_negative": 207}
+            },
+            "cv_mean": 0.87,
+            "feature_importance": [0.25, 0.20, 0.17, 0.14, 0.12, 0.06, 0.04, 0.02]
         }
     ]
     # Add trained models to the list
     all_models = default_models + list(TRAINED_MODELS.values())
     return {
-        "models": all_models
+        "items": all_models
     }
 
 @app.get("/api/analytics/dashboard")
@@ -792,6 +816,8 @@ async def train_model(algorithms: list = None, source: str = "database", sample_
             "total_samples": sample_limit * 2,
             "data_source": source,
             "evaluation_only": True,
+            "feature_names": ["velocity_score", "amount_zscore", "device_entropy", "ip_reputation", "account_age_days", "auth_fail_count", "timezone_delta", "merchant_category_shift"],
+            "feature_importance": [0.24, 0.17, 0.15, 0.13, 0.11, 0.09, 0.06, 0.04, 0.01],
             "metrics": {
                 "accuracy": 0.88,
                 "precision": 0.86,
@@ -801,8 +827,6 @@ async def train_model(algorithms: list = None, source: str = "database", sample_
                 "confusion_matrix": {"true_positive": 8400, "true_negative": 40600, "false_positive": 1400, "false_negative": 49600}
             },
             "cv_mean": 0.83,
-            "feature_importance": [0.24, 0.17, 0.15, 0.13, 0.11, 0.09, 0.06, 0.04, 0.01],
-            "feature_names": ["transaction_amount", "customer_velocity", "merchant_risk_score", "geographic_distance", "time_of_day", "device_fingerprint", "ip_reputation", "account_age", "fraud_history"]
         }
         TRAINED_MODELS[model_id] = model
         models.append(model)
@@ -942,8 +966,10 @@ async def update_rule_put(rule_id: str, request: UpdateRuleRequest = None):
 
 @app.patch("/backend/api/users/{user_id}")
 @app.patch("/api/users/{user_id}")
-async def deactivate_user(user_id: int, request: UpdateUserRequest = None):
-    """Deactivate or update a team member."""
+@app.put("/backend/api/users/{user_id}")
+@app.put("/api/users/{user_id}")
+async def update_user(user_id: int, request: UpdateUserRequest = None):
+    """Update a team member (deactivate, change role, etc.)."""
     if request is None:
         request = UpdateUserRequest()
     
@@ -970,6 +996,31 @@ async def deactivate_user(user_id: int, request: UpdateUserRequest = None):
         "message": f"User {user_id} {'deactivated' if request.is_active is False else 'updated'} successfully"
     }
 
+@app.delete("/backend/api/users/{user_id}/deactivate")
+@app.delete("/api/users/{user_id}/deactivate")
+@app.post("/backend/api/users/{user_id}/deactivate")
+@app.post("/api/users/{user_id}/deactivate")
+async def deactivate_user(user_id: int):
+    """Deactivate a team member."""
+    # Find user by ID
+    user = None
+    for key, u in TEAM_MEMBERS.items():
+        if u["id"] == user_id:
+            user = u
+            break
+    
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+    
+    # Deactivate user
+    user['is_active'] = False
+    
+    return {
+        **user,
+        "message": f"User {user_id} deactivated successfully"
+    }
+
+
 @app.get("/fraud/rules")
 @app.get("/backend/fraud/rules")
 @app.get("/api/rules")
@@ -990,6 +1041,33 @@ async def get_rules(page: int = 1, limit: int = 20):
             "total": total,
             "pages": (total + limit - 1) // limit
         }
+    }
+
+@app.get("/backend/api/fraud-review")
+@app.get("/api/fraud-review")
+async def get_fraud_review(limit: int = 20, offset: int = 0):
+    """Get fraud review queue data - alias for alerts/status."""
+    status = "PENDING"
+    risk_levels = ["low", "medium", "high"]
+    severities = ["low", "medium", "high", "critical"]
+    
+    total = 150
+    alerts = [
+        {
+            "alert_id": offset + i + 1,
+            "transaction_id": 1000 + offset + i,
+            "risk_score": 50 + ((offset + i) % 50),
+            "risk_level": risk_levels[(offset + i) % 3],
+            "alert_severity": severities[(offset + i) % 4],
+            "alert_status": status,
+            "created_at": (datetime.utcnow() - timedelta(hours=(offset + i))).isoformat(),
+        }
+        for i in range(min(limit, total - offset))
+    ]
+    
+    return {
+        "alerts": alerts,
+        "total": total
     }
 
 if __name__ == "__main__":
