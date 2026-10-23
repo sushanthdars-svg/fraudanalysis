@@ -8,7 +8,7 @@ a minimal FastAPI server with mock authentication endpoints.
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import logging
 import json
 import re
@@ -27,6 +27,11 @@ SECRET_KEY = "dev_secret_key_change_in_production_minimum_32_chars_required"
 ALGORITHM = "HS256"
 
 # Password validation function
+def validate_email_format(email: str) -> bool:
+    """Validate email format - supports .local domains for development."""
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z0-9.-]+$'
+    return re.match(pattern, email) is not None
+
 def validate_password_strength(password: str) -> tuple[bool, str]:
     """Validate password strength requirements."""
     if len(password) < 8:
@@ -62,16 +67,16 @@ app.add_middleware(
 
 # Data Models
 class LoginRequest(BaseModel):
-    email: str
+    email: str = Field(..., description="Email address (supports .local domains)")
     password: str
 
 class RegistrationRequest(BaseModel):
-    email: str
+    email: str = Field(..., description="Email address (supports .local domains)")
     password: str
     full_name: str = ""
 
 class GoogleLoginRequest(BaseModel):
-    email: str
+    email: str = Field(..., description="Email address (supports .local domains)")
     full_name: str = ""
     token: str = ""
 
@@ -155,7 +160,7 @@ async def health_check():
 
 @app.post("/backend/api/auth/login")
 @app.post("/api/auth/login")
-async def login(request: LoginRequest) -> LoginResponse:
+async def login(email: str, password: str) -> LoginResponse:
     """
     Login endpoint - mock version.
     
@@ -166,11 +171,11 @@ async def login(request: LoginRequest) -> LoginResponse:
     - Email: analyst@fraud-detection.local
     - Password: password
     """
-    email = request.email.lower()
+    email = email.lower()
     
     # Find user
     user = MOCK_USERS.get(email)
-    if not user or user["password"] != request.password:
+    if not user or user["password"] != password:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
@@ -195,9 +200,9 @@ async def login(request: LoginRequest) -> LoginResponse:
 
 @app.post("/backend/api/auth/register")
 @app.post("/api/auth/register")
-async def register(request: RegistrationRequest):
+async def register(email: str, password: str, full_name: str = ""):
     """Register endpoint - mock version with password strength validation."""
-    email = request.email.lower()
+    email = email.lower()
     
     if email in MOCK_USERS:
         raise HTTPException(
@@ -206,7 +211,7 @@ async def register(request: RegistrationRequest):
         )
     
     # Validate password strength
-    is_valid, error_message = validate_password_strength(request.password)
+    is_valid, error_message = validate_password_strength(password)
     if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -215,13 +220,13 @@ async def register(request: RegistrationRequest):
     
     # Create new user and persist
     user_id = max(u["id"] for u in MOCK_USERS.values()) + 1 if MOCK_USERS else 3
-    full_name = request.full_name.strip() if request.full_name else email.split("@")[0].title()
+    name = full_name.strip() if full_name else email.split("@")[0].title()
     
     new_user = {
         "id": user_id,
         "email": email,
-        "password": request.password,
-        "full_name": full_name,
+        "password": password,
+        "full_name": name,
         "role": "viewer",
         "is_active": True
     }
@@ -247,9 +252,9 @@ async def register(request: RegistrationRequest):
 
 @app.post("/backend/api/auth/google")
 @app.post("/api/auth/google")
-async def google_login(request: GoogleLoginRequest):
+async def google_login(email: str, full_name: str = "", token: str = ""):
     """Google login endpoint - mock version."""
-    email = request.email.lower()
+    email = email.lower()
     
     if not email:
         raise HTTPException(
@@ -264,7 +269,7 @@ async def google_login(request: GoogleLoginRequest):
             "id": user_id,
             "email": email,
             "password": "google_oauth",
-            "full_name": request.full_name or email.split("@")[0].title(),
+            "full_name": full_name or email.split("@")[0].title(),
             "role": "viewer",
             "is_active": True
         }
