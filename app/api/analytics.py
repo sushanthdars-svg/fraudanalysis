@@ -114,7 +114,7 @@ async def analytics_health():
 
 
 @router.get("/dashboard", response_model=AnalyticsOverviewResponse)
-async def get_dashboard_overview(
+def get_dashboard_overview(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
@@ -139,7 +139,7 @@ async def get_dashboard_overview(
 
 
 @router.get("/transactions", response_model=TransactionStatsResponse)
-async def get_transactions(
+def get_transactions(
     days: int = Query(30, ge=1, le=365),
     customer_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
@@ -216,7 +216,7 @@ async def get_alerts(
 
 
 @router.get("/customers")
-async def get_customers(
+def get_customers(
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)

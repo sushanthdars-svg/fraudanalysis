@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from decimal import Decimal
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import and_, func, desc
 
 from app.models.transaction import Transaction
@@ -65,7 +65,7 @@ class AnalyticsService:
         if customer_id:
             query = query.filter(Transaction.customer_id == customer_id)
         
-        transactions = query.all()
+        transactions = query.options(selectinload(Transaction.fraud_assessments)).all()
         
         if not transactions:
             return {
@@ -91,16 +91,15 @@ class AnalyticsService:
             total_volume += txn.amount
             
             # Get assessment for this transaction
-            assessment = session.query(FraudAssessment).filter(
-                FraudAssessment.transaction_id == txn.id
-            ).first()
+            assessment = txn.fraud_assessments[0] if txn.fraud_assessments else None
             
             if assessment:
-                if assessment.risk_category == "HIGH":
+                risk_category = assessment.risk_category.upper()
+                if risk_category == "HIGH":
                     high_risk_count += 1
-                elif assessment.risk_category == "MEDIUM":
+                elif risk_category == "MEDIUM":
                     medium_risk_count += 1
-                else:
+                elif risk_category == "LOW":
                     low_risk_count += 1
         
         avg_amount = total_volume / len(transactions) if transactions else Decimal("0")
@@ -328,17 +327,15 @@ class AnalyticsService:
         
         transactions = session.query(Transaction).filter(
             Transaction.customer_id == customer_id
-        ).all()
+        ).options(selectinload(Transaction.fraud_assessments)).all()
         
         total_transactions = len(transactions)
         
         high_risk_count = 0
         for txn in transactions:
-            assessment = session.query(FraudAssessment).filter(
-                FraudAssessment.transaction_id == txn.id
-            ).first()
+            assessment = txn.fraud_assessments[0] if txn.fraud_assessments else None
             
-            if assessment and assessment.risk_category == "HIGH":
+            if assessment and assessment.risk_category.upper() == "HIGH":
                 high_risk_count += 1
         
         fraud_rate = (high_risk_count / total_transactions * 100) if total_transactions > 0 else 0
@@ -485,7 +482,7 @@ class AnalyticsService:
                     FraudAssessment.transaction_id == txn.id
                 ).first()
                 
-                if assessment and assessment.risk_category == "HIGH":
+                if assessment and assessment.risk_category.upper() == "HIGH":
                     geographic_data[location]["high_risk_count"] += 1
         
         # Calculate fraud rates

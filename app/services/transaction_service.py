@@ -9,12 +9,13 @@ from io import StringIO
 from decimal import Decimal
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
-from sqlalchemy import and_, desc
+from sqlalchemy import and_, desc, func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.models.transaction import Transaction
 from app.models.customer import Customer
+from app.models.fraud_alert import FraudAssessment
 from app.schemas import TransactionCreate
 from app.services.audit_service import AuditService
 
@@ -112,7 +113,9 @@ class TransactionService:
         min_amount: Optional[Decimal] = None,
         max_amount: Optional[Decimal] = None,
         merchant_id: Optional[str] = None,
-        status: Optional[str] = None
+        status: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        transaction_id: Optional[str] = None,
     ) -> tuple[List[Transaction], int]:
         """
         List transactions with filtering and pagination.
@@ -146,8 +149,19 @@ class TransactionService:
             query = query.filter(Transaction.amount <= max_amount)
         if merchant_id:
             query = query.filter(Transaction.merchant_id == merchant_id)
+        if transaction_id:
+            query = query.filter(
+                Transaction.transaction_id.ilike(f"%{transaction_id}%")
+            )
         if status:
             query = query.filter(Transaction.status == status)
+        if risk_level:
+            query = query.join(
+                FraudAssessment,
+                FraudAssessment.transaction_id == Transaction.id,
+            ).filter(
+                func.lower(FraudAssessment.risk_category) == risk_level.lower()
+            )
         
         total_count = query.count()
         

@@ -14,6 +14,7 @@ A production-grade Python application for detecting financial fraud using a comb
 
 ### User Interface
 - **FastAPI Backend**: RESTful API with JWT authentication and OpenAPI documentation
+- **Modern React Console**: Responsive risk operations workspace at http://localhost:3000; see [frontend setup and training](frontend/README.md)
 - **Streamlit Dashboard**: Interactive web interface for analysts and administrators
 - **Responsive Design**: Professional analytics theme with real-time dashboards
 - **Transaction Explorer**: Search, filter, and export transaction data

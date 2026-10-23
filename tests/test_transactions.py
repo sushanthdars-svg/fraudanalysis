@@ -15,6 +15,7 @@ from app.main import app
 from app.db.base import Base
 from app.models.customer import Customer
 from app.models.transaction import Transaction
+from app.models.fraud_alert import FraudAssessment
 from app.models.fraud_rule import FraudRule
 from app.schemas import TransactionCreate, TransactionResponse
 from app.services.transaction_service import TransactionService
@@ -293,6 +294,42 @@ TXN_DUP,{},M001,100.00,2026-10-20T10:00:00,Walmart
         )
         assert len(result[0]) == 2
         assert all(100 <= float(t.amount) <= 150 for t in result[0])
+
+    def test_list_transactions_by_risk_level_and_transaction_id(
+        self,
+        db,
+        test_customer,
+        test_merchant,
+    ):
+        transaction = Transaction(
+            transaction_id="TXN_RISK_FILTER",
+            customer_id=test_customer.id,
+            merchant_id=test_merchant["merchant_id"],
+            amount=Decimal("125.00"),
+            transaction_date=datetime.utcnow(),
+            currency="USD",
+            status="completed",
+        )
+        db.add(transaction)
+        db.flush()
+        db.add(
+            FraudAssessment(
+                transaction_id=transaction.id,
+                risk_score=Decimal("80"),
+                risk_category="high",
+                rules_triggered_count=1,
+            )
+        )
+        db.commit()
+
+        result, total = TransactionService.list_transactions(
+            db,
+            risk_level="HIGH",
+            transaction_id="RISK_FILTER",
+        )
+
+        assert total == 1
+        assert [item.transaction_id for item in result] == ["TXN_RISK_FILTER"]
 
 
 # Transaction API Tests

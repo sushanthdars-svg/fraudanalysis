@@ -77,6 +77,7 @@ class ModelEvaluator:
         fraud_ratio = n_fraud / n_total
         
         metrics = {
+            'accuracy': float(np.mean(y_true == y_pred)),
             'set_name': set_name,
             'total_samples': int(n_total),
             'fraud_count': int(n_fraud),

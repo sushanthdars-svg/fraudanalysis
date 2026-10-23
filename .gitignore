@@ -86,6 +86,15 @@ Thumbs.db
 htmlcov/
 
 # Build artifacts
+node_modules/
+frontend/test-results/
+frontend/playwright-report/
+models/*_v*.joblib
+models/*_v*.scaler
+models/*_v*.json
+models/*.tmp
+models/.training.lock
+frontend/*.tsbuildinfo
 dist/
 build/
 *.egg-info/

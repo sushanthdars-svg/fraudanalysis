@@ -3,8 +3,7 @@ API Client for backend communication
 """
 import requests
 import streamlit as st
-from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any, Union
 from config import API_BASE_URL, API_TIMEOUT
 
 
@@ -30,15 +29,19 @@ class APIClient:
 
     def _handle_response(self, response: requests.Response) -> Dict[str, Any]:
         """Handle API response and errors."""
-        try:
-            if response.status_code == 401:
-                st.error("Authentication failed. Please login again.")
-                if "token" in st.session_state:
-                    del st.session_state.token
-                if "user" in st.session_state:
-                    del st.session_state.user
+        if response.status_code == 401:
+            if self.token:
+                from components.browser_session import clear_authentication
+
+                clear_authentication()
+                st.session_state.auth_notice = (
+                    "Your login has expired or is no longer valid. Please log in again."
+                )
                 st.rerun()
-            elif response.status_code == 403:
+            return {"error": "Invalid email or password.", "status_code": 401}
+
+        try:
+            if response.status_code == 403:
                 return {"error": "Access denied. You don't have permission for this action."}
             elif response.status_code == 404:
                 return {"error": "Resource not found."}
@@ -46,8 +49,15 @@ class APIClient:
                 return {"error": "Server error. Please try again later."}
             elif response.status_code >= 400:
                 try:
-                    return response.json()
-                except:
+                    detail = response.json().get("detail", "Request failed")
+                    if isinstance(detail, list):
+                        detail = "; ".join(
+                            f"{'.'.join(str(part) for part in item.get('loc', []))}: "
+                            f"{item.get('msg', 'Invalid value')}"
+                            for item in detail
+                        )
+                    return {"error": str(detail), "status_code": response.status_code}
+                except (ValueError, AttributeError):
                     return {"error": f"Request failed: {response.text}"}
 
             if response.status_code == 204:
@@ -69,6 +79,22 @@ class APIClient:
             return self._handle_response(response)
         except requests.RequestException as e:
             return {"error": f"Login failed: {str(e)}"}
+
+    def register(self, email: str, full_name: str, password: str) -> Dict[str, Any]:
+        """Register a viewer account."""
+        try:
+            response = self.session.post(
+                f"{self.base_url}/api/auth/register",
+                json={
+                    "email": email,
+                    "full_name": full_name,
+                    "password": password,
+                },
+                timeout=self.timeout,
+            )
+            return self._handle_response(response)
+        except requests.RequestException as e:
+            return {"error": f"Registration failed: {str(e)}"}
 
     def get_current_user(self) -> Dict[str, Any]:
         """Get current authenticated user info."""
@@ -106,12 +132,19 @@ class APIClient:
         max_amount: Optional[float] = None,
         merchant_id: Optional[str] = None,
         risk_level: Optional[str] = None,
+        transaction_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Get transactions with filters."""
         try:
-            params = {"skip": skip, "limit": limit}
+            params: Dict[str, Any] = {
+                "page": skip // limit + 1,
+                "limit": limit,
+            }
             if customer_id:
-                params["customer_id"] = customer_id
+                try:
+                    params["customer_id"] = int(customer_id)
+                except ValueError:
+                    return {"error": "Customer ID must be a number."}
             if start_date:
                 params["start_date"] = start_date
             if end_date:
@@ -124,6 +157,8 @@ class APIClient:
                 params["merchant_id"] = merchant_id
             if risk_level:
                 params["risk_level"] = risk_level
+            if transaction_id:
+                params["transaction_id"] = transaction_id
 
             response = self.session.get(
                 f"{self.base_url}/api/transactions",
@@ -149,26 +184,35 @@ class APIClient:
 
     def get_transaction_stats(
         self,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        days: int = 30,
     ) -> Dict[str, Any]:
         """Get transaction statistics."""
         try:
-            params = {}
-            if start_date:
-                params["start_date"] = start_date
-            if end_date:
-                params["end_date"] = end_date
-
             response = self.session.get(
-                f"{self.base_url}/api/transactions/stats/summary",
-                params=params,
+                f"{self.base_url}/api/analytics/transactions",
+                params={"days": days},
                 headers=self._get_headers(),
                 timeout=self.timeout,
             )
             return self._handle_response(response)
         except requests.RequestException as e:
             return {"error": f"Failed to fetch stats: {str(e)}"}
+
+    def get_transaction_trends(
+        self,
+        days: int = 30,
+    ) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
+        """Get daily transaction trends for dashboard charts."""
+        try:
+            response = self.session.get(
+                f"{self.base_url}/api/analytics/trends",
+                params={"days": days},
+                headers=self._get_headers(),
+                timeout=self.timeout,
+            )
+            return self._handle_response(response)
+        except requests.RequestException as e:
+            return {"error": f"Failed to fetch transaction trends: {str(e)}"}
 
     # Alert Endpoints
     def get_alerts(
@@ -236,7 +280,7 @@ class APIClient:
         """Get alert statistics."""
         try:
             response = self.session.get(
-                f"{self.base_url}/api/alerts/stats/summary",
+                f"{self.base_url}/api/analytics/alerts",
                 headers=self._get_headers(),
                 timeout=self.timeout,
             )
@@ -308,6 +352,19 @@ class APIClient:
             return {"error": f"Failed to delete rule: {str(e)}"}
 
     # Model Endpoints
+    def train_models(self, algorithms: List[str], source: str, sample_limit: int) -> Dict[str, Any]:
+        """Train and persist evaluation models through the API."""
+        try:
+            response = self.session.post(
+                f"{self.base_url}/api/models/train",
+                json={"algorithms": algorithms, "source": source, "sample_limit": sample_limit},
+                headers=self._get_headers(),
+                timeout=300,
+            )
+            return self._handle_response(response)
+        except requests.RequestException as exc:
+            return {"error": f"Training request failed: {exc}. Refresh models before retrying; training may still be running."}
+
     def get_models(self) -> Dict[str, Any]:
         """Get all models."""
         try:
@@ -333,7 +390,7 @@ class APIClient:
             return {"error": f"Failed to fetch model metrics: {str(e)}"}
 
     # User Endpoints
-    def get_users(self, skip: int = 0, limit: int = 20) -> Dict[str, Any]:
+    def get_users(self, skip: int = 0, limit: int = 100) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
         """Get all users."""
         try:
             response = self.session.get(
@@ -358,6 +415,18 @@ class APIClient:
             return self._handle_response(response)
         except requests.RequestException as e:
             return {"error": f"Failed to create user: {str(e)}"}
+
+    def get_user(self, user_id: int) -> Dict[str, Any]:
+        """Get an account's persisted profile."""
+        try:
+            response = self.session.get(
+                f"{self.base_url}/api/users/{user_id}",
+                headers=self._get_headers(),
+                timeout=self.timeout,
+            )
+            return self._handle_response(response)
+        except requests.RequestException as e:
+            return {"error": f"Failed to fetch user: {str(e)}"}
 
     def update_user(self, user_id: str, user_data: Dict[str, Any]) -> Dict[str, Any]:
         """Update user information."""
@@ -391,6 +460,7 @@ class APIClient:
         limit: int = 50,
         actor: Optional[str] = None,
         action: Optional[str] = None,
+        target_entity: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -401,6 +471,8 @@ class APIClient:
                 params["actor"] = actor
             if action:
                 params["action"] = action
+            if target_entity:
+                params["target_entity"] = target_entity
             if start_date:
                 params["start_date"] = start_date
             if end_date:
@@ -415,6 +487,21 @@ class APIClient:
             return self._handle_response(response)
         except requests.RequestException as e:
             return {"error": f"Failed to fetch audit logs: {str(e)}"}
+
+    def get_compliance_report(
+        self, report_type: str, start_date: str, end_date: str
+    ) -> Dict[str, Any]:
+        """Get a summary of persisted audit events for a UTC date range."""
+        try:
+            response = self.session.get(
+                f"{self.base_url}/api/audit-logs/compliance-report",
+                params={"report_type": report_type, "start_date": start_date, "end_date": end_date},
+                headers=self._get_headers(),
+                timeout=self.timeout,
+            )
+            return self._handle_response(response)
+        except requests.RequestException as e:
+            return {"error": f"Failed to fetch compliance report: {str(e)}"}
 
     # Customer Risk Endpoints
     def get_customer_risk_profile(self, customer_id: str) -> Dict[str, Any]:

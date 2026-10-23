@@ -2,12 +2,26 @@
 
 A production-ready Streamlit dashboard for monitoring fraud detection, analyzing transactions, managing alerts, and reviewing ML models. Integrates seamlessly with the FastAPI backend.
 
+A modern React console is also available at http://localhost:3000. See the
+[React setup and training guide](../frontend/README.md). Streamlit remains
+available at http://localhost:8502 during the transition.
+
+### Training models
+
+Active admins and analysts can open **Model Performance > Train a model**.
+Choose one or more algorithms, labeled database data or synthetic demo data,
+and a limit of 100-5,000 samples. Training saves the classifier, scaler and JSON
+metrics through the API. Synthetic data never enters the transaction database.
+UI-trained models are evaluation-only and are not deployed to live scoring.
+Both fraud and legitimate examples must appear in each chronological split.
+
 ## Features
 
 - **Authentication & Authorization**
   - JWT-based login with session management
+  - Public account registration with viewer-only default access
   - Role-based access control (Admin, Analyst, Viewer)
-  - Automatic session timeout (15 minutes, configurable)
+  - Login survives page refreshes; no dashboard inactivity logout
   - Login attempt lockout protection
 
 - **Dashboard Pages**
@@ -21,6 +35,8 @@ A production-ready Streamlit dashboard for monitoring fraud detection, analyzing
   8. **Audit Logs** - Compliance and audit trail
 
 - **Interactive Components**
+  - Always-visible sidebar navigation with icons, active-page highlighting,
+    keyboard support, and role-filtered pages (no navigation dropdown)
   - Plotly charts for exploration and trend analysis
   - Filterable data tables with pagination
   - Real-time risk assessment and alerts
@@ -84,6 +100,20 @@ python backend/main.py  # Or however your backend starts
 # Backend should be available at http://localhost:8000
 ```
 
+### Load local demo data
+
+A newly initialized database is empty. To add 500 clearly labeled synthetic
+transactions across up to 100 customers for local dashboard exploration, run
+this from the project root:
+
+```bash
+docker compose exec api python scripts/generate_synthetic_data.py --n-transactions 500
+```
+
+The generator dates transactions within the most recent 30 days and scores them
+with the fraud rule engine. Re-running it adds a new batch. This demo data is
+not real customer or payment data.
+
 ## Running the Dashboard
 
 ### Development Mode
@@ -93,6 +123,10 @@ streamlit run dashboard/app.py
 ```
 
 The dashboard will be available at `http://localhost:8501`
+
+On the login screen, select **Create account** to register with your name,
+email address, and password. New registrations receive viewer access; an
+administrator can assign a different role later.
 
 ### Production Mode
 
@@ -109,7 +143,7 @@ streamlit run dashboard/app.py \
 
 Central configuration file with:
 - API settings (base URL, timeouts)
-- Session management (timeout, max attempts)
+- Session persistence and login attempt protection
 - Role-based permissions
 - Page definitions and metadata
 - Color scheme and styling
@@ -119,7 +153,6 @@ Central configuration file with:
 See `.env.dashboard.template` for available settings:
 
 - `API_BASE_URL` - Backend API endpoint
-- `SESSION_TIMEOUT_MINUTES` - Session expiration time
 - `MAX_LOGIN_ATTEMPTS` - Failed login threshold
 - `ENABLE_*` - Feature flags for pages/features
 
@@ -128,16 +161,22 @@ See `.env.dashboard.template` for available settings:
 ### Login Flow
 
 1. User enters email and password
-2. AuthHandler calls `/auth/login` on backend
+2. AuthHandler calls `/api/auth/login` on backend
 3. Backend returns JWT token if credentials valid
-4. Token stored in `st.session_state`
+4. Token saved in browser storage and the current `st.session_state`
 5. Token injected in all subsequent API requests
 
 ### Session Management
 
-- Session timeout enforced on every page load
-- Automatic logout on timeout (15 minutes default)
-- Manual logout button available
+- The browser saves the access token in this application's local storage.
+- A new Streamlit connection restores it only after validation against `/api/auth/me`.
+- Page refreshes and inactivity do not discard valid login credentials.
+- Logout removes the saved token as well as the current Streamlit login state.
+- API token expiration (24 hours by default) and invalid-token rejection still apply;
+  browser persistence does not create never-expiring credentials.
+- Browser storage must be allowed. Use Logout on shared devices. The access token
+  is JavaScript-readable; production deployments should use HTTPS and consider
+  an HttpOnly-cookie authentication gateway for stronger XSS isolation.
 - Login attempt lockout after 5 failures (15 minutes)
 
 ### Role-Based Access
@@ -153,6 +192,31 @@ Permission checks happen on:
 - API calls (server enforces additional checks)
 
 ## API Integration
+
+### Administration
+
+User Management and Audit Logs are admin-only dashboard pages. Account creation
+submits email, full name, password (at least eight characters), and role together
+in a form. Department storage and welcome-email delivery are not implemented and
+are not offered as working options. Duplicate emails and API validation errors
+are displayed without claiming success.
+
+Audit Logs searches persisted events through `/api/audit-logs`, including actor,
+action, entity, and inclusive UTC date filters. The page shows up to 1,000 events
+per search and retains results while inspecting or exporting them. Reports
+summarize recorded events; they do not certify compliance. New login attempts,
+registrations and admin user changes are recorded. Past actions that were never
+logged cannot be reconstructed.
+
+### Model performance
+
+The Model Performance page lists saved `models/*_v*.json` training metadata
+through the authenticated `/api/models` endpoint. Select a saved model before
+loading its `/api/models/{model_id}/metrics`. Training history and comparison
+use the same saved metadata. An untrained installation shows an explicit
+empty state, not invented performance scores. New training runs save validation
+metrics and feature names alongside the model metadata; older metadata may
+not contain those fields and is displayed as "Not recorded".
 
 ### APIClient
 

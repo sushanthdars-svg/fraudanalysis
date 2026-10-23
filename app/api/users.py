@@ -1,201 +1,125 @@
-"""
-User management API endpoints for complete CRUD operations.
-Includes user profile, role management, and admin operations.
-"""
+"""User management using the persisted email-based account model."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from typing import List, Optional
-from pydantic import BaseModel, EmailStr
-
-from app.db.database import get_db
-from app.models.user import User
-from app.core.security import get_current_user, hash_password, verify_password, require_role
-from app.core.permissions import UserRole, require_admin_role
 import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.orm import Session
+
+from app.core.permissions import UserRole
+from app.core.security import get_current_user, hash_password, require_role
+from app.db.database import get_db
+from app.models import AuditLog, User
+from app.schemas import UserCreate as UserCreateRequest, UserResponse
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
-# Pydantic models
-class UserResponse(BaseModel):
-    id: int
-    username: str
-    email: str
-    full_name: Optional[str]
-    role: str
-    is_active: bool
-
-    class Config:
-        from_attributes = True
-
-
-class UserCreateRequest(BaseModel):
-    username: str
-    email: EmailStr
-    password: str
-    full_name: Optional[str] = None
-    role: str = "ANALYST"
-
-
 class UserUpdateRequest(BaseModel):
-    email: Optional[EmailStr] = None
-    full_name: Optional[str] = None
-    is_active: Optional[bool] = None
+    email: EmailStr | None = None
+    full_name: str | None = Field(None, min_length=1, max_length=255)
+    is_active: bool | None = None
+    role: UserRole | None = None
+
+    model_config = {"extra": "forbid"}
 
 
 class UserRoleUpdateRequest(BaseModel):
-    role: str
+    role: UserRole
 
 
-class CurrentUserResponse(BaseModel):
-    id: int
-    username: str
-    email: str
-    full_name: Optional[str]
-    role: str
-    is_active: bool
-
-    class Config:
-        from_attributes = True
-
-
-@router.get("/me", response_model=CurrentUserResponse)
-async def get_current_user(
-    current_user: User = Depends(get_current_user),
-):
-    """Get current authenticated user information."""
-    return CurrentUserResponse.from_orm(current_user)
+def record_user_change(db: Session, actor: User, user: User, action: str) -> None:
+    db.add(AuditLog(
+        actor_id=actor.id,
+        action=action,
+        action_category="user_management",
+        target_type="user",
+        target_id=str(user.id),
+        action_status="success",
+        changes_after={"role": user.role, "is_active": user.is_active}
+        if action != "delete_user" else None,
+    ))
 
 
-@router.get("", response_model=List[UserResponse])
-async def list_users(
-    skip: int = 0,
-    limit: int = 100,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(UserRole.ADMIN))
-):
-    """
-    List all users (admin only).
-    
-    Query Parameters:
-    - skip: Number of records to skip (default 0)
-    - limit: Number of records to return (default 100, max 500)
-    """
+def commit_user_change(db: Session) -> None:
     try:
-        limit = min(limit, 500)
-        users = db.query(User).offset(skip).limit(limit).all()
-        return [UserResponse.from_orm(u) for u in users]
-    except Exception as e:
-        logger.error(f"Error listing users: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error retrieving users"
-        )
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, detail="Email already exists or account is still referenced")
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Unable to save user change")
+        raise HTTPException(500, detail="Unable to save user change")
 
 
-@router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+def find_user(db: Session, user_id: int) -> User:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, detail="User not found")
+    return user
+
+
+@router.get("/me", response_model=UserResponse)
+async def current_user_profile(current_user: User = Depends(get_current_user)):
+    return current_user
+
+
+@router.get("", response_model=list[UserResponse])
+async def list_users(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
+):
+    return db.query(User).order_by(User.id).offset(skip).limit(limit).all()
+
+
+@router.post("", response_model=UserResponse, status_code=201)
 async def create_user(
     user_data: UserCreateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(UserRole.ADMIN))
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
 ):
-    """
-    Create new user (admin only).
-    
-    Request body:
-    - username: Unique username
-    - email: User email address
-    - password: User password
-    - full_name: Optional full name
-    - role: User role (default ANALYST)
-    """
+    email = str(user_data.email).lower()
+    name = user_data.full_name.strip()
+    if not name:
+        raise HTTPException(422, detail="Full name cannot be blank")
+    if db.query(User).filter(User.email == email).first():
+        raise HTTPException(409, detail="Email already exists")
+    user = User(
+        email=email, full_name=name,
+        password_hash=hash_password(user_data.password),
+        role=user_data.role, is_active=True,
+    )
     try:
-        # Check if user already exists
-        existing_user = db.query(User).filter(
-            (User.username == user_data.username) | (User.email == user_data.email)
-        ).first()
-        
-        if existing_user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Username or email already exists"
-            )
-        
-        # Validate role
-        if user_data.role not in [role.value for role in UserRole]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid role. Must be one of: {[r.value for r in UserRole]}"
-            )
-        
-        # Create new user
-        new_user = User(
-            username=user_data.username,
-            email=user_data.email,
-            full_name=user_data.full_name,
-            hashed_password=hash_password(user_data.password),
-            role=user_data.role,
-            is_active=True
-        )
-        
-        db.add(new_user)
-        db.commit()
-        db.refresh(new_user)
-        
-        logger.info(f"User created: {new_user.username}")
-        return UserResponse.from_orm(new_user)
-    
-    except HTTPException:
-        raise
-    except Exception as e:
+        db.add(user)
+        db.flush()
+        record_user_change(db, current_user, user, "create_user")
+        commit_user_change(db)
+    except IntegrityError:
         db.rollback()
-        logger.error(f"Error creating user: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error creating user"
-        )
+        raise HTTPException(409, detail="Email already exists")
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Unable to create user")
+        raise HTTPException(500, detail="Unable to create user")
+    db.refresh(user)
+    return user
 
 
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Get user details by ID.
-    
-    Path Parameters:
-    - user_id: User ID to retrieve
-    """
-    try:
-        user = db.query(User).filter(User.id == user_id).first()
-        
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        # Users can only view their own details unless admin
-        if current_user.id != user_id and current_user.role != UserRole.ADMIN.value:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this user"
-            )
-        
-        return UserResponse.from_orm(user)
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting user: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error retrieving user"
-        )
+    if current_user.id != user_id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(403, detail="Not authorized to view this user")
+    return find_user(db, user_id)
 
 
 @router.put("/{user_id}", response_model=UserResponse)
@@ -203,67 +127,32 @@ async def update_user(
     user_id: int,
     user_data: UserUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Update user information.
-    
-    Path Parameters:
-    - user_id: User ID to update
-    
-    Users can only update their own profile unless admin.
-    """
-    try:
-        user = db.query(User).filter(User.id == user_id).first()
-        
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        # Users can only update their own profile unless admin
-        if current_user.id != user_id and current_user.role != UserRole.ADMIN.value:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to update this user"
-            )
-        
-        # Update fields if provided
-        if user_data.email is not None:
-            # Check email uniqueness
-            existing = db.query(User).filter(
-                (User.email == user_data.email) & (User.id != user_id)
-            ).first()
-            if existing:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Email already in use"
-                )
-            user.email = user_data.email
-        
-        if user_data.full_name is not None:
-            user.full_name = user_data.full_name
-        
-        # Only admins can change is_active
-        if user_data.is_active is not None and current_user.role == UserRole.ADMIN.value:
-            user.is_active = user_data.is_active
-        
-        db.commit()
-        db.refresh(user)
-        
-        logger.info(f"User updated: {user.username}")
-        return UserResponse.from_orm(user)
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error updating user: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error updating user"
-        )
+    if current_user.id != user_id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(403, detail="Not authorized to update this user")
+    if current_user.role != UserRole.ADMIN and (
+        user_data.role is not None or user_data.is_active is not None
+    ):
+        raise HTTPException(403, detail="Only admins can change account role or status")
+    user = find_user(db, user_id)
+    if user_data.email is not None:
+        email = str(user_data.email).lower()
+        if db.query(User).filter(User.email == email, User.id != user_id).first():
+            raise HTTPException(409, detail="Email already exists")
+        user.email = email
+    if user_data.full_name is not None:
+        if not user_data.full_name.strip():
+            raise HTTPException(422, detail="Full name cannot be blank")
+        user.full_name = user_data.full_name.strip()
+    if user_data.is_active is not None:
+        user.is_active = user_data.is_active
+    if user_data.role is not None:
+        user.role = user_data.role
+    record_user_change(db, current_user, user, "update_user")
+    commit_user_change(db)
+    db.refresh(user)
+    return user
 
 
 @router.put("/{user_id}/role", response_model=UserResponse)
@@ -271,93 +160,22 @@ async def update_user_role(
     user_id: int,
     role_data: UserRoleUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(UserRole.ADMIN))
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
 ):
-    """
-    Update user role (admin only).
-    
-    Path Parameters:
-    - user_id: User ID to update
-    
-    Request body:
-    - role: New role value
-    """
-    try:
-        user = db.query(User).filter(User.id == user_id).first()
-        
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        # Validate role
-        if role_data.role not in [role.value for role in UserRole]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid role. Must be one of: {[r.value for r in UserRole]}"
-            )
-        
-        user.role = role_data.role
-        db.commit()
-        db.refresh(user)
-        
-        logger.info(f"User role updated: {user.username} -> {role_data.role}")
-        return UserResponse.from_orm(user)
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error updating user role: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error updating user role"
-        )
+    return await update_user(
+        user_id, UserUpdateRequest(role=role_data.role), db, current_user
+    )
 
 
-@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{user_id}", status_code=204)
 async def delete_user(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(UserRole.ADMIN))
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
 ):
-    """
-    Delete user (admin only).
-    
-    Path Parameters:
-    - user_id: User ID to delete
-    
-    Note: Cannot delete own user account.
-    """
-    try:
-        # Prevent self-deletion
-        if current_user.id == user_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot delete your own user account"
-            )
-        
-        user = db.query(User).filter(User.id == user_id).first()
-        
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        db.delete(user)
-        db.commit()
-        
-        logger.info(f"User deleted: {user.username}")
-        return None
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error deleting user: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error deleting user"
-        )
+    if current_user.id == user_id:
+        raise HTTPException(400, detail="Cannot delete your own user account")
+    user = find_user(db, user_id)
+    record_user_change(db, current_user, user, "delete_user")
+    db.delete(user)
+    commit_user_change(db)

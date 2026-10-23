@@ -4,8 +4,7 @@ Table components for the dashboard
 import streamlit as st
 import pandas as pd
 from typing import List, Dict, Any, Optional
-from datetime import datetime
-from utils import format_currency, format_datetime, format_percentage, truncate_text, get_risk_color
+from utils import format_currency, format_datetime, format_percentage, truncate_text
 
 
 def create_transaction_table(transactions: List[Dict[str, Any]]) -> pd.DataFrame:
@@ -15,13 +14,22 @@ def create_transaction_table(transactions: List[Dict[str, Any]]) -> pd.DataFrame
     
     rows = []
     for txn in transactions:
+        risk_score = txn.get("risk_score")
         rows.append({
-            "ID": truncate_text(txn.get("id", ""), 15),
+            "ID": truncate_text(
+                txn.get("transaction_id", txn.get("id", "")),
+                20,
+            ),
             "Customer": txn.get("customer_id", "-"),
-            "Merchant": txn.get("merchant_id", "-"),
+            "Merchant": txn.get("merchant_name", txn.get("merchant_id", "-")),
             "Amount": format_currency(txn.get("amount", 0)),
-            "Date": format_datetime(txn.get("created_at", "")),
-            "Risk": f"{txn.get('risk_score', 0):.1f}%",
+            "Date": format_datetime(
+                txn.get("transaction_date", txn.get("created_at", ""))
+            ),
+            "Risk": f"{risk_score:.1f}%" if risk_score is not None else "Not assessed",
+            "Risk Level": (
+                (txn.get("risk_level") or "Not assessed").replace("_", " ").title()
+            ),
             "Status": txn.get("status", "-"),
         })
     
@@ -97,7 +105,7 @@ def create_audit_log_table(logs: List[Dict[str, Any]]) -> pd.DataFrame:
             "Timestamp": format_datetime(log.get("timestamp", "")),
             "Actor": log.get("actor", "-"),
             "Action": log.get("action", "-").replace("_", " ").upper(),
-            "Target": f"{log.get('target_type', '-')} : {truncate_text(log.get('target_id', ''), 15)}",
+            "Target": f"{log.get('target_type', '-')} : {truncate_text(str(log.get('target_id') or ''), 15)}",
             "Status": "✓ Success" if log.get("success", False) else "✗ Failed",
             "Details": truncate_text(log.get("details", ""), 40),
         })
@@ -249,14 +257,14 @@ def display_user_detail(user: Dict[str, Any]):
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.metric("User ID", truncate_text(user.get("id", ""), 20))
+        st.metric("User ID", str(user.get("id", "")))
         st.metric("Email", user.get("email", "-"))
         st.metric("Full Name", user.get("full_name", "-"))
     
     with col2:
         st.metric("Role", user.get("role", "-").title())
         st.metric("Department", user.get("department", "-"))
-        st.metric("Status", "✓ Active" if user.get("active", False) else "✗ Inactive")
+        st.metric("Status", "✓ Active" if user.get("is_active", False) else "✗ Inactive")
     
     with col3:
         st.metric("Created", format_datetime(user.get("created_at", "")))

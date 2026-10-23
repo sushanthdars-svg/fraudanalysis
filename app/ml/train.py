@@ -207,7 +207,8 @@ class ModelTrainer:
         model: Any,
         metadata: Dict[str, Any],
         name: str,
-        version: str = "1.0.0"
+        version: str = "1.0.0",
+        scaler: Optional[StandardScaler] = None,
     ) -> str:
         """
         Save trained model and metadata using joblib.
@@ -225,20 +226,27 @@ class ModelTrainer:
         models_dir.mkdir(parents=True, exist_ok=True)
         
         # Create version-specific filename
-        model_filename = f"{name}_v{version}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.joblib"
+        stem = f"{name}_v{version}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}"
+        model_filename = f"{stem}.joblib"
         model_path = models_dir / model_filename
         
         # Save model
         joblib.dump(model, model_path)
+        if scaler is not None:
+            scaler_path = models_dir / f"{stem}.scaler"
+            joblib.dump(scaler, scaler_path)
+            metadata = dict(metadata, scaler_artifact=scaler_path.name)
         logger.info(f"Model saved to {model_path}")
         
         # Save metadata
-        metadata_filename = f"{name}_v{version}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+        metadata_filename = f"{stem}.json"
         metadata_path = models_dir / metadata_filename
         
         import json
-        with open(metadata_path, 'w') as f:
+        temporary_metadata = metadata_path.with_suffix(".json.tmp")
+        with open(temporary_metadata, 'w', encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
+        temporary_metadata.replace(metadata_path)
         logger.info(f"Metadata saved to {metadata_path}")
         
         return str(model_path)

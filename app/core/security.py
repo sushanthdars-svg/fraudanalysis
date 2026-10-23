@@ -10,6 +10,7 @@ from argon2.exceptions import VerifyMismatchError, InvalidHashError
 from fastapi import HTTPException, status, Depends, Header
 from sqlalchemy.orm import Session
 from app.core.config import get_settings
+from app.db.database import get_db
 
 
 # Initialize password hasher with Argon2
@@ -153,7 +154,7 @@ def get_user_role_from_token(token: str) -> str:
 
 async def get_current_user(
     authorization: str = Header(None),
-    db: Session = Depends(lambda: None)  # Will be injected properly by FastAPI
+    db: Session = Depends(get_db)
 ):
     """
     Dependency function to get current authenticated user from JWT token.
@@ -185,12 +186,7 @@ async def get_current_user(
     user_id = get_user_id_from_token(token)
     
     # Import here to avoid circular imports
-    from app.db.database import get_db
     from app.models import User
-    
-    # Get a fresh db session if not provided
-    if db is None:
-        db = next(get_db())
     
     user = db.query(User).filter(User.id == user_id).first()
     if not user:

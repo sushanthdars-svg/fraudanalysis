@@ -8,15 +8,16 @@ from pathlib import Path
 import getpass
 from datetime import datetime
 
-# Add project root to path
-project_root = Path(__file__).parent.absolute()
+# Add the project root, not the scripts directory, so direct script execution can
+# resolve the app package both locally and in the API container.
+project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from app.models import User
-from app.core.config import settings
-from app.core.security import get_password_hash
+from app.core.config import get_settings
+from app.core.security import hash_password
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,7 +51,7 @@ def create_admin_user(
             return False
         
         # Create database connection
-        engine = create_engine(settings.DATABASE_URL)
+        engine = create_engine(get_settings().database_url)
         Session = sessionmaker(bind=engine)
         session = Session()
         
@@ -70,7 +71,7 @@ def create_admin_user(
         # Create new admin user
         admin_user = User(
             email=email,
-            password_hash=get_password_hash(password),
+            password_hash=hash_password(password),
             full_name=full_name or email.split("@")[0],
             role="admin",
             is_active=True

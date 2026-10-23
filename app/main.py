@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import get_settings
 from app.db.database import get_engine
 from app.db.base import Base
-from app.api import auth, transactions, fraud_rules, fraud_assessment, alert_management, alert_dashboard, analytics, users
+from app.api import auth, transactions, fraud_rules, fraud_assessment, alert_management, alert_dashboard, analytics, users, models, audit_logs
 import logging
 
 # Configure logging
@@ -51,6 +51,7 @@ async def health_check():
 
 # Include routers
 app.include_router(auth.router)
+app.include_router(auth.router, prefix="/api")
 app.include_router(transactions.router)
 app.include_router(fraud_rules.router)
 app.include_router(fraud_assessment.router)
@@ -58,6 +59,8 @@ app.include_router(alert_management.router)
 app.include_router(alert_dashboard.router)
 app.include_router(analytics.router)
 app.include_router(users.router)
+app.include_router(models.router)
+app.include_router(audit_logs.router)
 
 
 # Error handlers
@@ -116,4 +119,3 @@ if __name__ == "__main__":
         reload=settings.is_development,
         log_level=settings.log_level.lower()
     )
-

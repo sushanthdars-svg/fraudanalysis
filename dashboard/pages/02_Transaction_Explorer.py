@@ -2,16 +2,15 @@
 Transaction Explorer Page
 """
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from components import (
     AuthHandler,
-    create_quick_filters,
     create_transaction_table,
     display_transaction_detail,
     create_export_button,
     display_empty_state,
 )
-from utils import show_error_message, format_currency, truncate_text
+from utils import show_error_message, truncate_text
 
 
 def main():
@@ -37,8 +36,8 @@ def main():
     
     with col1:
         customer_id = st.text_input(
-            "Customer ID",
-            placeholder="Search by customer...",
+            "Customer database ID",
+            placeholder="Enter a numeric ID",
             key="txn_customer"
         )
     
@@ -85,13 +84,14 @@ def main():
     
     # Convert dates to ISO format
     start_date_str = start_date.isoformat()
-    end_date_str = end_date.isoformat()
+    end_date_str = datetime.combine(end_date, time.max).isoformat()
     
     # Search button
     if st.button("🔍 Search Transactions", use_container_width=True):
         with st.spinner("Searching transactions..."):
             filters = {
                 "customer_id": customer_id if customer_id else None,
+                "transaction_id": transaction_id if transaction_id else None,
                 "start_date": start_date_str,
                 "end_date": end_date_str,
                 "min_amount": min_amount,
@@ -104,12 +104,30 @@ def main():
             if "error" in response:
                 show_error_message("Error", response.get("error"))
             else:
-                transactions = response.get("items", [])
+                transactions = response.get("data", [])
                 
                 if not transactions:
-                    display_empty_state("No transactions found matching your criteria")
+                    total_transactions = response.get("pagination", {}).get("total", 0)
+                    if total_transactions == 0:
+                        st.info(
+                            "No transaction records are in the database yet. "
+                            "Load clearly labeled synthetic demo records with "
+                            "`docker compose exec api python scripts/generate_synthetic_data.py "
+                            "--n-transactions 500`."
+                        )
+                    else:
+                        display_empty_state(
+                            "No transactions found matching your criteria"
+                        )
                 else:
-                    st.markdown(f"### Found {len(transactions)} Transaction(s)")
+                    total_transactions = response.get("pagination", {}).get(
+                        "total",
+                        len(transactions),
+                    )
+                    st.markdown(
+                        f"### Showing {len(transactions)} of "
+                        f"{total_transactions:,} transaction(s)"
+                    )
                     
                     # Create export button
                     st.markdown("**Export:**")

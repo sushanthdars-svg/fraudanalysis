@@ -35,7 +35,9 @@ class DataPreprocessor:
     }
     
     @staticmethod
-    def load_data(session: Session, fraud_label_only: bool = True) -> pd.DataFrame:
+    def load_data(
+        session: Session, fraud_label_only: bool = True, limit: Optional[int] = None
+    ) -> pd.DataFrame:
         """
         Load transaction data from database.
         
@@ -53,6 +55,9 @@ class DataPreprocessor:
         if fraud_label_only:
             query = query.filter(Transaction.fraud_label.isnot(None))
         
+        if limit is not None:
+            from app.models import Transaction
+            query = query.order_by(Transaction.transaction_date.desc(), Transaction.id.desc()).limit(limit)
         transactions = query.all()
         
         if not transactions:
@@ -99,7 +104,10 @@ class DataPreprocessor:
         df = df.sort_values(['customer_id', 'transaction_date']).reset_index(drop=True)
         
         # 1. Transaction amount features (normalized, log-scaled)
-        df['amount_normalized'] = (df['amount'] - df['amount'].mean()) / df['amount'].std()
+        amount_std = df['amount'].std()
+        df['amount_normalized'] = (
+            (df['amount'] - df['amount'].mean()) / amount_std if amount_std > 0 else 0.0
+        )
         df['amount_log'] = np.log1p(df['amount'])
         df['amount_squared'] = df['amount'] ** 2
         
@@ -112,6 +120,7 @@ class DataPreprocessor:
                                   'customer_min_amount', 'customer_max_amount', 'customer_total_transactions']
         
         df = df.merge(customer_stats, on='customer_id', how='left')
+        df['customer_std_amount'] = df['customer_std_amount'].fillna(0)
         df['amount_deviation'] = df['amount'] - df['customer_avg_amount']
         df['amount_deviation_normalized'] = df['amount_deviation'] / (df['customer_std_amount'] + 1)
         
@@ -220,7 +229,10 @@ class DataPreprocessor:
             'merchant_category', 'transaction_type', 'payment_method',
             'location_country', 'location_city', 'device_id', 'channel', 'week'
         }
-        feature_cols = [col for col in df.columns if col not in exclude_cols]
+        feature_cols = [
+            col for col in df.select_dtypes(include='number').columns
+            if col not in exclude_cols
+        ]
         
         # Separate features and target
         X = df[feature_cols].values
@@ -242,6 +254,17 @@ class DataPreprocessor:
         
         X_test = X[val_end_idx:]
         y_test = y[val_end_idx:]
+
+        for name, labels in (("training", y_train), ("validation", y_val), ("test", y_test)):
+            if set(labels) != {0, 1}:
+                raise ValueError(
+                    f"The chronological {name} split must contain both fraud and legitimate labels. "
+                    "Add labeled data across the date range or increase the sample limit."
+                )
+        if min(np.bincount(y_train.astype(int))) < 5:
+            raise ValueError("The training split needs at least 5 samples of each class for cross-validation.")
+        if not np.isfinite(X.astype(float)).all():
+            raise ValueError("Training features contain missing or non-finite numeric values.")
         
         # Scale features
         scaler = StandardScaler()

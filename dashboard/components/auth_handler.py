@@ -5,7 +5,12 @@ import streamlit as st
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from components.api_client import APIClient
-from config import API_BASE_URL, SESSION_TIMEOUT_MINUTES, UserRole, ROLE_PERMISSIONS
+from components.browser_session import (
+    clear_authentication,
+    request_storage,
+    synchronize_storage,
+)
+from config import API_BASE_URL, UserRole, ROLE_PERMISSIONS
 
 
 class AuthHandler:
@@ -26,21 +31,28 @@ class AuthHandler:
             st.session_state.locked_until = None
 
     @staticmethod
+    def restore_browser_session():
+        """Restore browser logins only after the API validates the saved token."""
+        result = synchronize_storage()
+        request = st.session_state.auth_storage_request
+        if st.session_state.get("auth_storage_processed") == request["id"]:
+            return
+
+        if request["action"] == "read" and result.get("token"):
+            client = APIClient(base_url=API_BASE_URL, token=result["token"])
+            user = client.get_current_user()
+            if "error" in user or "detail" in user:
+                st.error(user.get("error", user.get("detail")))
+                st.stop()
+            st.session_state.token = result["token"]
+            st.session_state.user = user
+
+        st.session_state.auth_storage_processed = request["id"]
+
+    @staticmethod
     def check_session_timeout() -> bool:
-        """Check if session has timed out."""
-        if st.session_state.token is None:
-            return False
-
-        last_activity = st.session_state.get("last_activity")
-        if last_activity and isinstance(last_activity, datetime):
-            elapsed = datetime.now() - last_activity
-            if elapsed > timedelta(minutes=SESSION_TIMEOUT_MINUTES):
-                AuthHandler.logout()
-                st.warning(f"Session expired after {SESSION_TIMEOUT_MINUTES} minutes of inactivity.")
-                return False
-
-        st.session_state.last_activity = datetime.now()
-        return True
+        """Keep valid logins active without a dashboard inactivity deadline."""
+        return st.session_state.get("token") is not None
 
     @staticmethod
     def login(email: str, password: str) -> bool:
@@ -61,7 +73,7 @@ class AuthHandler:
         client = APIClient(base_url=API_BASE_URL)
         response = client.login(email, password)
 
-        if "error" in response:
+        if "error" in response or "detail" in response:
             st.session_state.login_attempts += 1
 
             from config import MAX_LOGIN_ATTEMPTS, LOCKOUT_DURATION_MINUTES
@@ -75,7 +87,10 @@ class AuthHandler:
                 )
             else:
                 remaining = MAX_LOGIN_ATTEMPTS - st.session_state.login_attempts
-                st.error(f"Login failed: {response.get('error')}. ({remaining} attempts remaining)")
+                st.error(
+                    f"Login failed: {response.get('error', response.get('detail'))}. "
+                    f"({remaining} attempts remaining)"
+                )
             return False
 
         if "access_token" in response:
@@ -87,9 +102,10 @@ class AuthHandler:
             client.set_token(st.session_state.token)
             user_response = client.get_current_user()
 
-            if "error" not in user_response:
+            if "error" not in user_response and "detail" not in user_response:
                 st.session_state.user = user_response
                 st.session_state.last_activity = datetime.now()
+                request_storage("write", st.session_state.token)
                 return True
             else:
                 st.error("Could not fetch user information.")
@@ -98,6 +114,18 @@ class AuthHandler:
 
         st.error("Invalid response from authentication service.")
         return False
+
+    @staticmethod
+    def register(email: str, full_name: str, password: str) -> bool:
+        """Create a new viewer account through the authentication API."""
+        client = APIClient(base_url=API_BASE_URL)
+        response = client.register(email, full_name, password)
+        if "error" in response or "detail" in response:
+            st.error(response.get("detail", response.get("error", "Registration failed.")))
+            return False
+
+        st.success("Account created. You can now log in.")
+        return True
 
     @staticmethod
     def is_authenticated() -> bool:
@@ -117,7 +145,10 @@ class AuthHandler:
         """Get current user's role."""
         user = AuthHandler.get_current_user()
         if user:
-            return user.get("role", UserRole.VIEWER)
+            role = user.get("role", UserRole.VIEWER)
+            if isinstance(role, UserRole):
+                return role.value
+            return str(role).lower()
         return None
 
     @staticmethod
@@ -135,7 +166,11 @@ class AuthHandler:
         if not role:
             return False
 
-        permissions = ROLE_PERMISSIONS.get(role, [])
+        try:
+            normalized_role = UserRole(str(role).lower())
+        except ValueError:
+            return False
+        permissions = ROLE_PERMISSIONS.get(normalized_role, [])
         return permission in permissions
 
     @staticmethod
@@ -144,7 +179,10 @@ class AuthHandler:
         role = AuthHandler.get_user_role()
         if not role:
             return False
-        return role in page_roles
+        normalized_role = role.lower()
+        return normalized_role in {
+            str(page_role).lower() for page_role in page_roles
+        }
 
     @staticmethod
     def logout():
@@ -153,9 +191,7 @@ class AuthHandler:
             client = APIClient(base_url=API_BASE_URL, token=st.session_state.token)
             client.logout()
 
-        st.session_state.token = None
-        st.session_state.user = None
-        st.session_state.last_activity = None
+        clear_authentication()
         st.rerun()
 
     @staticmethod

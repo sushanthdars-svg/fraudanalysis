@@ -3,6 +3,7 @@ Tests for transaction analytics functionality.
 """
 
 import pytest
+from sqlalchemy import event
 from datetime import datetime, timedelta
 from decimal import Decimal
 from sqlalchemy.orm import Session
@@ -11,6 +12,36 @@ from app.models.transaction import Transaction
 from app.models.customer import Customer
 from app.models.fraud_alert import FraudAlert, FraudAssessment
 from tests.conftest import create_test_fraud_assessment_and_alert
+
+
+def test_statistics_batches_assessments_instead_of_querying_per_transaction(db, sample_customer):
+    transactions = [
+        Transaction(
+            customer_id=sample_customer.id, transaction_id=f"QUERY_BOUND_{index}",
+            amount=100, transaction_date=datetime.now(),
+        )
+        for index in range(100)
+    ]
+    db.add_all(transactions)
+    db.flush()
+    db.add_all([
+        FraudAssessment(transaction_id=transaction.id, risk_score=80, risk_category="high")
+        for transaction in transactions[:50]
+    ])
+    db.commit()
+    statements = []
+    def count_selects(connection, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", count_selects)
+    try:
+        result = AnalyticsService.get_transaction_statistics(db)
+    finally:
+        event.remove(engine, "before_cursor_execute", count_selects)
+    assert result["total_transactions"] == 100
+    assert result["high_risk_transactions"] == 50
+    assert len(statements) <= 3
 
 
 @pytest.fixture
@@ -93,6 +124,39 @@ class TestTransactionAnalytics:
         )
 
         assert stats["total_transactions"] == 3
+
+    def test_get_transaction_statistics_counts_lowercase_assessment_categories(
+        self,
+        db: Session,
+        sample_customer: Customer,
+    ):
+        for index, category in enumerate(("low", "medium", "high")):
+            transaction = Transaction(
+                customer_id=sample_customer.id,
+                transaction_id=f"TXN_CATEGORY_{index}",
+                amount=Decimal("100.00"),
+                transaction_date=datetime.utcnow(),
+                transaction_type="purchase",
+                currency="USD",
+                status="completed",
+            )
+            db.add(transaction)
+            db.flush()
+            db.add(
+                FraudAssessment(
+                    transaction_id=transaction.id,
+                    risk_score=Decimal("20"),
+                    risk_category=category,
+                    rules_triggered_count=0,
+                )
+            )
+        db.commit()
+
+        stats = AnalyticsService.get_transaction_statistics(db, days=30)
+
+        assert stats["low_risk_transactions"] == 1
+        assert stats["medium_risk_transactions"] == 1
+        assert stats["high_risk_transactions"] == 1
 
     def test_get_transaction_trends(self, db: Session, sample_customer: Customer):
         """Test daily transaction trends."""

@@ -1,307 +1,154 @@
-"""
-Model Performance Page
-"""
+"""Inspect metrics and history from saved model training artifacts."""
+
+import pandas as pd
 import streamlit as st
-from datetime import datetime, timedelta
-from components import (
-    AuthHandler,
-    create_bar_chart,
-    create_line_chart,
-    display_chart_with_error_handling,
-    display_empty_state,
-)
-from utils import show_error_message, format_percentage
+
+from components import AuthHandler, create_bar_chart, display_chart_with_error_handling
+from utils import show_error_message
+
+
+def format_score(value):
+    """Evaluation metrics are fractions, not percentages."""
+    return f"{value:.2%}" if value is not None else "Not recorded"
 
 
 def main():
-    """Main model performance page."""
-    
-    # Check authentication
     if not AuthHandler.is_authenticated():
         st.error("Please login to access this page")
         return
-    
     if not AuthHandler.has_permission("view_models"):
         st.error("You don't have permission to view this page")
         return
-    
-    client = AuthHandler.get_api_client()
-    
+
     st.markdown("## 🤖 Model Performance")
-    
-    # Tabs
-    tab1, tab2, tab3 = st.tabs(["Current Model", "Training History", "Model Comparison"])
-    
-    with tab1:
-        st.markdown("### Current Model Metrics")
-        
-        # Model selector
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("🔄 Load Model Metrics", use_container_width=True):
-                with st.spinner("Loading model metrics..."):
-                    response = client.get_model_metrics()
-                    
-                    if "error" in response:
-                        show_error_message("Error", response.get("error"))
+    client = AuthHandler.get_api_client()
+    if AuthHandler.has_permission("train_models"):
+        with st.expander("Train a model"):
+            st.caption("Evaluation training only. Saved models are not automatically deployed.")
+            with st.form("model_training"):
+                algorithms = st.multiselect(
+                    "Algorithms", ["random_forest", "logistic_regression", "isolation_forest"],
+                    default=["random_forest"],
+                )
+                source = st.selectbox("Training data", ["database", "synthetic"])
+                sample_limit = st.number_input("Maximum samples", min_value=100, max_value=5000, value=1000, step=100)
+                st.caption("Synthetic data is for demonstration only and is never inserted into your database.")
+                submitted = st.form_submit_button("Start training")
+            if submitted:
+                if not algorithms:
+                    st.error("Select at least one algorithm.")
+                else:
+                    with st.spinner("Training and saving model artifacts..."):
+                        result = client.train_models(algorithms, source, int(sample_limit))
+                    if "error" in result:
+                        show_error_message("Unable to train models", result["error"])
                     else:
-                        st.session_state.current_model = response
-        
-        if "current_model" in st.session_state:
-            model = st.session_state.current_model
-            
-            st.markdown(f"**Model Version:** {model.get('version', 'Unknown')}")
-            st.markdown(f"**Trained:** {model.get('training_date', 'Unknown')}")
-            
-            st.divider()
-            
-            # Metrics cards
-            col1, col2, col3, col4 = st.columns(4)
-            
-            metrics = model.get("metrics", {})
-            
-            with col1:
-                st.metric(
-                    "Accuracy",
-                    format_percentage(metrics.get("accuracy", 0))
-                )
-            
-            with col2:
-                st.metric(
-                    "Precision",
-                    format_percentage(metrics.get("precision", 0))
-                )
-            
-            with col3:
-                st.metric(
-                    "Recall",
-                    format_percentage(metrics.get("recall", 0))
-                )
-            
-            with col4:
-                st.metric(
-                    "F1 Score",
-                    format_percentage(metrics.get("f1_score", 0))
-                )
-            
-            st.divider()
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.metric(
-                    "ROC-AUC",
-                    f"{metrics.get('roc_auc', 0):.3f}"
-                )
-            
-            with col2:
-                st.metric(
-                    "Dataset Size",
-                    f"{model.get('dataset_size', 0):,}"
-                )
-            
-            st.divider()
-            
-            # Confusion Matrix
-            st.markdown("### Confusion Matrix")
-            
-            confusion = model.get("confusion_matrix", {})
-            if confusion:
-                cm_data = [
-                    {"Predicted": "Positive", "Actual Positive": confusion.get("tp", 0), "Actual Negative": confusion.get("fp", 0)},
-                    {"Predicted": "Negative", "Actual Positive": confusion.get("fn", 0), "Actual Negative": confusion.get("tn", 0)},
-                ]
-                
-                import pandas as pd
-                cm_df = pd.DataFrame(cm_data).set_index("Predicted")
-                st.dataframe(cm_df, use_container_width=True)
-            
-            st.divider()
-            
-            # Feature Importance
-            st.markdown("### Feature Importance")
-            
+                        st.success(f"Saved {len(result['items'])} model(s). Select one below to inspect its metrics.")
+                        st.session_state.pop("current_model", None)
+    response = client.get_models()
+    if "error" in response:
+        show_error_message("Unable to load models", response["error"])
+        return
+
+    models = response["items"]
+    if not models:
+        st.info(
+            "No trained models are available in the API's models directory yet. "
+            "Train a model and save its model artifact and JSON training metadata "
+            "before loading performance metrics."
+        )
+        return
+
+    by_id = {model["id"]: model for model in models}
+    selected_id = st.selectbox(
+        "Saved model",
+        list(by_id),
+        format_func=lambda model_id: (
+            f"{by_id[model_id]['name']} · {by_id[model_id]['version']}"
+        ),
+    )
+    current, history, comparison = st.tabs(
+        ["Selected Model", "Training History", "Model Comparison"]
+    )
+    with current:
+        if st.button("🔄 Load Model Metrics", use_container_width=True):
+            st.session_state.pop("current_model", None)
+            result = client.get_model_metrics(selected_id)
+            if "error" in result:
+                show_error_message("Unable to load metrics", result["error"])
+            else:
+                st.session_state.current_model = result
+
+        model = st.session_state.get("current_model")
+        if model and model["id"] == selected_id:
+            st.caption(
+                f"Trained: {model.get('training_date') or 'Not recorded'} | "
+                f"Training samples: {model.get('dataset_size') or 'Not recorded'} | "
+                f"Data source: {model.get('data_source', 'Not recorded')}"
+            )
+            metrics = model["metrics"]
+            if metrics:
+                for column, (label, key) in zip(
+                    st.columns(4),
+                    [("Accuracy", "accuracy"), ("Precision", "precision"),
+                     ("Recall", "recall"), ("F1 Score", "f1_score")],
+                ):
+                    column.metric(label, format_score(metrics.get(key)))
+                auc = metrics.get("roc_auc")
+                st.metric("ROC-AUC", f"{auc:.3f}" if auc is not None else "Not recorded")
+                confusion = metrics.get("confusion_matrix")
+                if confusion:
+                    st.subheader("Confusion matrix")
+                    st.json(confusion)
+            else:
+                st.info("Validation metrics were not recorded for this model.")
+            if model.get("cv_mean") is not None:
+                st.metric("Cross-validation F1 (mean)", format_score(model["cv_mean"]))
+
             features = model.get("feature_importance", [])
+            names = model.get("feature_names", [])
             if features:
-                # Sort by importance
-                features = sorted(features, key=lambda x: x.get("importance", 0), reverse=True)[:10]
-                
+                feature_data = [
+                    {"feature_name": names[i] if i < len(names) else f"Feature {i + 1}",
+                     "importance": value}
+                    for i, value in enumerate(features)
+                ]
                 display_chart_with_error_handling(
                     create_bar_chart,
-                    features,
-                    "Top 10 Important Features",
-                    "feature_name",
-                    "importance",
-                    "Feature",
-                    "Importance Score",
-                    horizontal=True
+                    sorted(feature_data, key=lambda item: item["importance"], reverse=True)[:10],
+                    "Feature importance", "feature_name", "importance",
+                    "Feature", "Importance", horizontal=True,
                 )
-            else:
-                display_empty_state("No feature importance data available")
-    
-    with tab2:
-        st.markdown("### Training History")
-        
-        # Load options
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            limit = st.number_input(
-                "Number of Versions",
-                min_value=5,
-                max_value=50,
-                value=10,
-                key="history_limit"
-            )
-        
-        with col2:
-            if st.button("🔄 Load History", use_container_width=True):
-                with st.spinner("Loading training history..."):
-                    response = client.get_model_training_history(limit=limit)
-                    
-                    if "error" in response:
-                        show_error_message("Error", response.get("error"))
-                    else:
-                        st.session_state.model_history = response.get("items", [])
-        
-        if "model_history" in st.session_state:
-            history = st.session_state.model_history
-            
-            if not history:
-                display_empty_state("No training history available")
-            else:
-                st.markdown(f"### {len(history)} Model Version(s)")
-                
-                # Create table
-                import pandas as pd
-                history_data = []
-                for h in history:
-                    history_data.append({
-                        "Version": h.get("version", "-"),
-                        "Training Date": h.get("training_date", "-"),
-                        "Accuracy": format_percentage(h.get("accuracy", 0)),
-                        "Precision": format_percentage(h.get("precision", 0)),
-                        "Recall": format_percentage(h.get("recall", 0)),
-                        "Dataset Size": f"{h.get('dataset_size', 0):,}"
-                    })
-                
-                df = pd.DataFrame(history_data)
-                st.dataframe(df, use_container_width=True, hide_index=True)
-                
-                st.divider()
-                
-                # Accuracy trend
-                st.markdown("### Accuracy Trend Over Time")
-                
-                trend_data = [
-                    {
-                        "version": h.get("version", "-"),
-                        "accuracy": h.get("accuracy", 0)
-                    }
-                    for h in reversed(history)
-                ]
-                
-                display_chart_with_error_handling(
-                    create_line_chart,
-                    trend_data,
-                    "Model Accuracy Trend",
-                    "version",
-                    "accuracy",
-                    "Model Version",
-                    "Accuracy"
-                )
-    
-    with tab3:
-        st.markdown("### Compare Models")
-        
-        if "model_history" not in st.session_state:
-            st.info("Load training history from the 'Training History' tab first")
         else:
-            history = st.session_state.model_history
-            
-            if len(history) < 2:
-                st.warning("At least 2 models needed for comparison")
-            else:
-                col1, col2 = st.columns(2)
-                
-                versions = [h.get("version", "") for h in history]
-                
-                with col1:
-                    model1_idx = st.selectbox(
-                        "Model 1",
-                        range(len(versions)),
-                        format_func=lambda x: versions[x],
-                        key="compare_model1"
-                    )
-                
-                with col2:
-                    model2_idx = st.selectbox(
-                        "Model 2",
-                        range(len(versions)),
-                        format_func=lambda x: versions[x],
-                        index=min(1, len(versions)-1) if len(versions) > 1 else 0,
-                        key="compare_model2"
-                    )
-                
-                if st.button("Compare Models", use_container_width=True):
-                    model1 = history[model1_idx]
-                    model2 = history[model2_idx]
-                    
-                    st.markdown("### Metrics Comparison")
-                    
-                    import pandas as pd
-                    
-                    comparison_data = {
-                        "Metric": ["Accuracy", "Precision", "Recall", "F1 Score", "ROC-AUC"],
-                        model1.get("version", "Model 1"): [
-                            format_percentage(model1.get("accuracy", 0)),
-                            format_percentage(model1.get("precision", 0)),
-                            format_percentage(model1.get("recall", 0)),
-                            format_percentage(model1.get("f1_score", 0)),
-                            f"{model1.get('roc_auc', 0):.3f}"
-                        ],
-                        model2.get("version", "Model 2"): [
-                            format_percentage(model2.get("accuracy", 0)),
-                            format_percentage(model2.get("precision", 0)),
-                            format_percentage(model2.get("recall", 0)),
-                            format_percentage(model2.get("f1_score", 0)),
-                            f"{model2.get('roc_auc', 0):.3f}"
-                        ]
+            st.caption("Choose a saved model and select Load Model Metrics.")
+
+    with history:
+        st.dataframe(
+            pd.DataFrame([
+                {"Model": model["name"], "Version": model["version"],
+                 "Trained": model["training_date"],
+                 "Training samples": model["dataset_size"],
+                 "F1 Score": format_score(model["metrics"].get("f1_score"))}
+                for model in models
+            ]),
+            use_container_width=True,
+            hide_index=True,
+        )
+    with comparison:
+        if len(models) < 2:
+            st.info("At least two saved models are needed for comparison.")
+        else:
+            selected = st.multiselect(
+                "Models to compare", list(by_id), default=list(by_id)[:2]
+            )
+            if len(selected) >= 2:
+                st.dataframe(pd.DataFrame({
+                    model_id: {
+                        key: format_score(by_id[model_id]["metrics"].get(key))
+                        for key in ("accuracy", "precision", "recall", "f1_score", "roc_auc")
                     }
-                    
-                    comp_df = pd.DataFrame(comparison_data)
-                    st.dataframe(comp_df, use_container_width=True, hide_index=True)
-                    
-                    # Highlight improvement
-                    st.markdown("### Performance Change")
-                    
-                    col1, col2, col3 = st.columns(3)
-                    
-                    accuracy_diff = model2.get("accuracy", 0) - model1.get("accuracy", 0)
-                    precision_diff = model2.get("precision", 0) - model1.get("precision", 0)
-                    recall_diff = model2.get("recall", 0) - model1.get("recall", 0)
-                    
-                    with col1:
-                        st.metric(
-                            "Accuracy Change",
-                            f"{accuracy_diff:+.2%}",
-                            "better" if accuracy_diff > 0 else "worse"
-                        )
-                    
-                    with col2:
-                        st.metric(
-                            "Precision Change",
-                            f"{precision_diff:+.2%}",
-                            "better" if precision_diff > 0 else "worse"
-                        )
-                    
-                    with col3:
-                        st.metric(
-                            "Recall Change",
-                            f"{recall_diff:+.2%}",
-                            "better" if recall_diff > 0 else "worse"
-                        )
+                    for model_id in selected
+                }), use_container_width=True)
 
 
 if __name__ == "__main__":

@@ -57,17 +57,22 @@ class UserRole(str, Enum):
 
 ROLE_PERMISSIONS = {
     UserRole.ADMIN: [
+        "view_analytics",
+        "train_models",
         "view_dashboard",
         "view_transactions",
         "view_alerts",
         "manage_rules",
         "manage_users",
         "view_logs",
+        "view_audit_logs",
         "view_models",
         "edit_rules",
         "review_alerts",
     ],
     UserRole.ANALYST: [
+        "view_analytics",
+        "train_models",
         "view_dashboard",
         "view_transactions",
         "view_alerts",
@@ -79,6 +84,7 @@ ROLE_PERMISSIONS = {
         "view_dashboard",
         "view_transactions",
         "view_models",
+        "view_analytics",
     ],
 }
 

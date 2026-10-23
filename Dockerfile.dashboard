@@ -2,7 +2,7 @@
 # Python 3.14 slim base image with comprehensive security and performance optimizations
 
 # Multi-stage build for production efficiency
-FROM python:3.14-slim as builder
+FROM python:3.14-slim AS builder
 
 WORKDIR /app
 

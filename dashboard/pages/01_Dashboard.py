@@ -2,10 +2,13 @@
 Dashboard Overview Page
 """
 import streamlit as st
-from datetime import datetime, timedelta
-import pandas as pd
-from components import AuthHandler, APIClient, create_metric_row, create_line_chart, create_bar_chart, display_chart_with_error_handling, display_empty_state
-from utils import format_currency, format_percentage, format_large_number, show_error_message
+from components import (
+    AuthHandler,
+    create_line_chart,
+    display_chart_with_error_handling,
+    display_empty_state,
+)
+from utils import format_currency, format_large_number, show_error_message
 
 
 def main():
@@ -25,7 +28,8 @@ def main():
     client = AuthHandler.get_api_client()
     
     # Page title
-    st.markdown("## 📊 Executive Overview")
+    st.markdown("## Executive overview")
+    st.caption("A current snapshot of transaction activity and risk signals.")
     
     # KPI Cards
     st.markdown("### Key Performance Indicators")
@@ -34,11 +38,17 @@ def main():
     with st.spinner("Loading dashboard data..."):
         stats = client.get_transaction_stats()
         alert_stats = client.get_alert_stats()
-    
-    if "error" in stats or "error" in alert_stats:
+        trends = client.get_transaction_trends()
+
+    errors = [
+        result["error"]
+        for result in (stats, alert_stats, trends)
+        if "error" in result
+    ]
+    if errors:
         show_error_message(
             "Error Loading Data",
-            "Could not fetch dashboard metrics. Please try refreshing."
+            "; ".join(errors)
         )
         return
     
@@ -54,16 +64,15 @@ def main():
         )
     
     with col2:
-        fraud_count = stats.get("flagged_transactions", 0)
-        fraud_rate = (fraud_count / total_txns * 100) if total_txns > 0 else 0
+        high_risk_count = stats.get("high_risk_transactions", 0)
         st.metric(
-            "⚠️ Flagged Transactions",
-            f"{fraud_count:,}",
-            f"{fraud_rate:.2f}% of total"
+            "⚠️ High-Risk Transactions",
+            f"{high_risk_count:,}",
+            "Last 30 days"
         )
     
     with col3:
-        pending_alerts = alert_stats.get("pending_count", 0)
+        pending_alerts = alert_stats.get("pending_alerts", 0)
         st.metric(
             "🚨 Pending Alerts",
             pending_alerts,
@@ -71,11 +80,11 @@ def main():
         )
     
     with col4:
-        avg_risk = stats.get("average_risk_score", 0)
+        average_amount = stats.get("average_amount", 0)
         st.metric(
-            "📈 Avg Risk Score",
-            f"{avg_risk:.1f}%",
-            "System-wide average"
+            "💳 Average Transaction",
+            format_currency(average_amount),
+            "Last 30 days"
         )
     
     st.divider()
@@ -86,36 +95,41 @@ def main():
     col1, col2 = st.columns(2)
     
     with col1:
-        # Fraud trend line chart
-        fraud_trend = stats.get("fraud_trend", [])
-        if fraud_trend:
+        transaction_trend = [
+            {"date": item["date"], "count": item["transaction_count"]}
+            for item in trends
+        ]
+        if transaction_trend:
             display_chart_with_error_handling(
                 create_line_chart,
-                fraud_trend,
-                "Fraud Cases Over Time",
-                "date",
-                "count",
-                "Date",
-                "Fraud Cases"
-            )
-        else:
-            display_empty_state("No fraud trend data available")
-    
-    with col2:
-        # Transaction volume trend
-        volume_trend = stats.get("volume_trend", [])
-        if volume_trend:
-            display_chart_with_error_handling(
-                create_line_chart,
-                volume_trend,
-                "Transaction Volume Trend",
+                transaction_trend,
+                "Transactions Over Time",
                 "date",
                 "count",
                 "Date",
                 "Transactions"
             )
         else:
-            display_empty_state("No volume trend data available")
+            display_empty_state("No transaction trend data available")
+    
+    with col2:
+        # Transaction volume trend
+        amount_trend = [
+            {"date": item["date"], "amount": item["total_volume"]}
+            for item in trends
+        ]
+        if amount_trend:
+            display_chart_with_error_handling(
+                create_line_chart,
+                amount_trend,
+                "Transaction Amount Trend",
+                "date",
+                "amount",
+                "Date",
+                "Amount"
+            )
+        else:
+            display_empty_state("No transaction amount trend data available")
     
     st.divider()
     
@@ -125,19 +139,44 @@ def main():
     col1, col2, col3 = st.columns([1, 1, 2])
     
     with col1:
-        risk_dist = stats.get("risk_distribution", {})
+        risk_dist = {
+            "low": stats.get("low_risk_transactions", 0),
+            "medium": stats.get("medium_risk_transactions", 0),
+            "high": stats.get("high_risk_transactions", 0),
+            "critical": 0,
+        }
+        assessed_transactions = sum(risk_dist.values())
+        if not assessed_transactions:
+            st.info(
+                "Transactions are available, but no fraud assessments have been "
+                "recorded for this period yet."
+            )
         if risk_dist:
             low = risk_dist.get("low", 0)
-            st.metric("🟢 Low Risk", low, f"{(low/total_txns*100):.1f}%")
+            low_percentage = low / assessed_transactions * 100 if assessed_transactions else 0
+            st.metric(
+                "Low risk",
+                f"{low:,}" if assessed_transactions else "—",
+                f"{low_percentage:.1f}% of assessed" if assessed_transactions else "No assessments",
+            )
         
-        st.metric("🟡 Medium Risk", risk_dist.get("medium", 0), "-")
+        st.metric(
+            "Medium risk",
+            f"{risk_dist.get('medium', 0):,}" if assessed_transactions else "—",
+        )
     
     with col2:
-        st.metric("🔴 High Risk", risk_dist.get("high", 0), "-")
-        st.metric("⚫ Critical", risk_dist.get("critical", 0), "-")
+        st.metric(
+            "High risk",
+            f"{risk_dist.get('high', 0):,}" if assessed_transactions else "—",
+        )
+        st.metric(
+            "Critical",
+            f"{risk_dist.get('critical', 0):,}" if assessed_transactions else "—",
+        )
     
     with col3:
-        if risk_dist:
+        if assessed_transactions:
             try:
                 from components import create_pie_chart
                 risk_data = [
@@ -153,26 +192,20 @@ def main():
                 )
             except Exception as e:
                 st.error(f"Error creating chart: {str(e)}")
+        else:
+            display_empty_state("Risk distribution will appear after assessments are recorded")
     
     st.divider()
     
-    # Top Merchants by Fraud
-    st.markdown("### Top Merchants by Fraud Cases")
-    
-    top_merchants = stats.get("top_merchants_by_fraud", [])
-    if top_merchants:
-        display_chart_with_error_handling(
-            create_bar_chart,
-            top_merchants,
-            "Fraud Cases by Merchant",
-            "merchant_id",
-            "fraud_count",
-            "Merchant",
-            "Fraud Cases",
-            horizontal=True
-        )
-    else:
-        display_empty_state("No merchant fraud data available")
+    # Transaction value overview
+    st.markdown("### Transaction value overview")
+    value_col1, value_col2, value_col3 = st.columns(3)
+    with value_col1:
+        st.metric("Total volume", format_currency(stats.get("total_volume", 0)))
+    with value_col2:
+        st.metric("Lowest transaction", format_currency(stats.get("min_amount", 0)))
+    with value_col3:
+        st.metric("Highest transaction", format_currency(stats.get("max_amount", 0)))
     
     st.divider()
     
@@ -184,54 +217,33 @@ def main():
     with col1:
         st.metric(
             "⏳ Pending",
-            alert_stats.get("pending_count", 0)
+            alert_stats.get("pending_alerts", 0)
         )
     
     with col2:
         st.metric(
             "👁️ Under Review",
-            alert_stats.get("under_review_count", 0)
+            alert_stats.get("under_review_alerts", 0)
         )
     
     with col3:
         st.metric(
             "✅ Approved",
-            alert_stats.get("approved_count", 0)
+            alert_stats.get("approved_alerts", 0)
         )
     
     with col4:
         st.metric(
             "❌ Rejected",
-            alert_stats.get("rejected_count", 0)
+            alert_stats.get("rejected_alerts", 0)
         )
     
     st.divider()
     
-    # System Health
-    st.markdown("### System Health")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric(
-            "📡 API Status",
-            "🟢 Operational",
-            "All systems running"
-        )
-    
-    with col2:
-        st.metric(
-            "🤖 ML Model",
-            "🟢 Active",
-            "Last trained 1 hour ago"
-        )
-    
-    with col3:
-        st.metric(
-            "💾 Database",
-            "🟢 Healthy",
-            "0% errors"
-        )
+    st.caption(
+        "Metrics reflect the most recent 30 days. Risk counts are based on "
+        "stored fraud assessments, not the synthetic ground-truth labels."
+    )
 
 
 if __name__ == "__main__":

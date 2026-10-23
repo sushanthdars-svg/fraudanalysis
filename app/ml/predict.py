@@ -7,6 +7,7 @@ import numpy as np
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 import joblib
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -64,8 +65,17 @@ class ModelPredictor:
         # Look for Random Forest first (preferred), then others
         for pattern in ["random_forest_v*.joblib", "logistic_regression_v*.joblib", "isolation_forest_v*.joblib"]:
             model_files = sorted(models_dir.glob(pattern), reverse=True)
-            if model_files:
-                model_path = str(model_files[0])
+            for path in model_files:
+                metadata_path = path.with_suffix(".json")
+                if metadata_path.is_file():
+                    try:
+                        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        logger.exception("Cannot read candidate model metadata: %s", metadata_path.name)
+                        continue
+                    if metadata.get("evaluation_only") or metadata.get("data_source") == "synthetic":
+                        continue
+                model_path = str(path)
                 model_name = pattern.split('_v')[0]
                 return model_path, model_name
         

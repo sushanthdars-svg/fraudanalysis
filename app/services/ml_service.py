@@ -38,7 +38,11 @@ class MLService:
         use_fraud_labeled_only: bool = True,
         train_logistic_regression: bool = True,
         train_random_forest: bool = True,
-        train_isolation_forest: bool = False
+        train_isolation_forest: bool = False,
+        training_data: Optional[pd.DataFrame] = None,
+        data_source: str = "database",
+        evaluation_only: bool = False,
+        generate_plots: bool = True,
     ) -> Dict[str, Any]:
         """
         Train one or more ML models.
@@ -58,13 +62,19 @@ class MLService:
         try:
             # Load data
             logger.info("Loading data from database...")
-            df = DataPreprocessor.load_data(session, fraud_label_only=use_fraud_labeled_only)
+            if not any((train_logistic_regression, train_random_forest, train_isolation_forest)):
+                raise ValueError("Select at least one model to train.")
+            df = (
+                training_data.copy() if training_data is not None else
+                DataPreprocessor.load_data(session, fraud_label_only=use_fraud_labeled_only)
+            )
             
             if len(df) < 100:
                 logger.error("Insufficient data for training (< 100 samples)")
                 return {
                     'status': 'error',
-                    'message': 'Insufficient training data',
+                    'message': 'At least 100 labeled transactions are required for training.',
+                    'error_type': 'invalid_data',
                     'samples': len(df)
                 }
             
@@ -79,6 +89,12 @@ class MLService:
             
             self.feature_cols = feature_cols
             self.scaler = scaler
+            provenance = {
+                'data_source': data_source,
+                'evaluation_only': evaluation_only,
+                'total_samples': len(df),
+                'split_strategy': 'chronological_70_10_20',
+            }
             
             results = {
                 'status': 'success',
@@ -104,10 +120,12 @@ class MLService:
                 
                 # Evaluate
                 y_pred_lr = lr_model.predict(X_val)
-                lr_metrics = ModelEvaluator.evaluate(y_val, y_pred_lr, set_name='validation')
+                lr_proba = lr_model.predict_proba(X_val)[:, 1] if hasattr(lr_model, 'predict_proba') else None
+                lr_metrics = ModelEvaluator.evaluate(y_val, y_pred_lr, lr_proba, set_name='validation')
                 
                 # Save
-                model_path = ModelTrainer.save_model(lr_model, lr_metadata, 'logistic_regression')
+                lr_metadata.update(provenance, validation_metrics=lr_metrics, feature_names=feature_cols)
+                model_path = ModelTrainer.save_model(lr_model, lr_metadata, 'logistic_regression', scaler=scaler)
                 
                 results['models']['logistic_regression'] = {
                     'path': model_path,
@@ -126,7 +144,8 @@ class MLService:
                 rf_metrics = ModelEvaluator.evaluate(y_val, y_pred_rf, y_pred_proba_rf, set_name='validation')
                 
                 # Save
-                model_path = ModelTrainer.save_model(rf_model, rf_metadata, 'random_forest')
+                rf_metadata.update(provenance, validation_metrics=rf_metrics, feature_names=feature_cols)
+                model_path = ModelTrainer.save_model(rf_model, rf_metadata, 'random_forest', scaler=scaler)
                 
                 results['models']['random_forest'] = {
                     'path': model_path,
@@ -135,7 +154,7 @@ class MLService:
                 }
                 
                 # Plot feature importance
-                if hasattr(rf_model, 'feature_importances_'):
+                if generate_plots and hasattr(rf_model, 'feature_importances_'):
                     importance_plot = ModelEvaluator.plot_feature_importance(
                         rf_model.feature_importances_,
                         feature_cols,
@@ -154,7 +173,8 @@ class MLService:
                 iso_metrics = ModelEvaluator.evaluate(y_val, y_pred_iso, set_name='validation')
                 
                 # Save
-                model_path = ModelTrainer.save_model(iso_model, iso_metadata, 'isolation_forest')
+                iso_metadata.update(provenance, validation_metrics=iso_metrics, feature_names=feature_cols)
+                model_path = ModelTrainer.save_model(iso_model, iso_metadata, 'isolation_forest', scaler=scaler)
                 
                 results['models']['isolation_forest'] = {
                     'path': model_path,
@@ -172,7 +192,7 @@ class MLService:
                 results['test_metrics'] = test_metrics
                 
                 # Plot curves
-                if y_pred_proba_test is not None:
+                if generate_plots and y_pred_proba_test is not None:
                     roc_plot = ModelEvaluator.plot_roc_curve(y_test, y_pred_proba_test)
                     pr_plot = ModelEvaluator.plot_precision_recall_curve(y_test, y_pred_proba_test)
                     cm_plot = ModelEvaluator.plot_confusion_matrix(y_test, y_pred_test)
@@ -189,10 +209,11 @@ class MLService:
             return results
         
         except Exception as e:
-            logger.error(f"Error in model training: {e}")
+            logger.exception("Error in model training")
             return {
                 'status': 'error',
-                'message': str(e)
+                'message': str(e),
+                'error_type': 'invalid_data' if isinstance(e, ValueError) else 'training_failure',
             }
     
     def predict_transaction(self, transaction_features: Dict[str, float]) -> Dict[str, Any]:

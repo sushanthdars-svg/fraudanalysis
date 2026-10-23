@@ -6,16 +6,12 @@ Handles transaction CRUD, listing, filtering, and batch import.
 import logging
 from decimal import Decimal
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.db.database import get_db
-from app.schemas import (
-    TransactionCreate, TransactionResponse, TransactionImportRow,
-    FraudAssessmentResponse, TriggeredRuleDetail, ErrorResponse
-)
-from app.models.transaction import Transaction
+from app.schemas import TransactionCreate
 from app.models.fraud_alert import FraudAssessment, TriggeredRule
 from app.services.transaction_service import TransactionService
 from app.services.fraud_engine import FraudEngine
@@ -29,7 +25,7 @@ router = APIRouter(prefix="/transactions", tags=["transactions"])
 @router.get("", response_model=dict)
 async def list_transactions(
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user),
+    _current_user = Depends(get_current_user),
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(50, ge=1, le=500, description="Results per page"),
     customer_id: Optional[int] = Query(None, description="Filter by customer ID"),
@@ -38,7 +34,9 @@ async def list_transactions(
     min_amount: Optional[Decimal] = Query(None, description="Minimum transaction amount"),
     max_amount: Optional[Decimal] = Query(None, description="Maximum transaction amount"),
     merchant_id: Optional[str] = Query(None, description="Filter by merchant ID"),
-    status: Optional[str] = Query(None, description="Filter by transaction status")
+    status: Optional[str] = Query(None, description="Filter by transaction status"),
+    risk_level: Optional[str] = Query(None, description="Filter by assessed risk level"),
+    transaction_id: Optional[str] = Query(None, description="Search transaction ID")
 ):
     """
     List transactions with pagination and filtering.
@@ -53,6 +51,8 @@ async def list_transactions(
     - max_amount: Maximum amount
     - merchant_id: Merchant ID filter
     - status: Transaction status filter
+    - risk_level: Assessed risk category
+    - transaction_id: Partial transaction ID search
     """
     try:
         # Parse dates if provided
@@ -87,7 +87,9 @@ async def list_transactions(
             min_amount=min_amount,
             max_amount=max_amount,
             merchant_id=merchant_id,
-            status=status
+            status=status,
+            risk_level=risk_level,
+            transaction_id=transaction_id
         )
         
         return {
@@ -100,7 +102,15 @@ async def list_transactions(
                     "merchant_name": t.merchant_name,
                     "transaction_date": t.transaction_date.isoformat(),
                     "status": t.status,
-                    "currency": t.currency
+                    "currency": t.currency,
+                    "risk_score": (
+                        float(t.fraud_assessments[0].risk_score)
+                        if t.fraud_assessments else None
+                    ),
+                    "risk_level": (
+                        t.fraud_assessments[0].risk_category
+                        if t.fraud_assessments else None
+                    )
                 }
                 for t in transactions
             ],
@@ -208,7 +218,7 @@ async def create_transaction(
 async def get_transaction(
     transaction_id: int,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    _current_user = Depends(get_current_user)
 ):
     """Get transaction details with fraud assessment."""
     try:
@@ -227,14 +237,14 @@ async def get_transaction(
         
         triggered_rules = []
         if assessment:
-            rules = db.query(TriggeredRule).filter(
-                TriggeredRule.fraud_assessment_id == assessment.id
+            rules = db.query(TriggeredRule).options(joinedload(TriggeredRule.rule)).filter(
+                TriggeredRule.assessment_id == assessment.id
             ).all()
             triggered_rules = [
                 {
-                    "rule_id": r.triggered_rule_id,
-                    "rule_name": r.triggered_rule_name,
-                    "explanation": r.explanation
+                    "rule_id": r.rule.rule_id,
+                    "rule_name": r.rule.name,
+                    "explanation": r.rule_explanation
                 }
                 for r in rules
             ]

@@ -47,6 +47,15 @@ class LoginRequest(BaseModel):
     password: str = Field(..., description="User password")
 
 
+class UserRegistrationRequest(BaseModel):
+    """Public registration schema; callers cannot assign their own role."""
+    email: EmailStr
+    full_name: str = Field(..., min_length=1, max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
+
+    model_config = {"extra": "forbid"}
+
+
 class TokenResponse(BaseModel):
     """Schema for token response."""
     access_token: str = Field(..., description="JWT access token")

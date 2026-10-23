@@ -6,10 +6,12 @@ Creates realistic fraud and legitimate transaction patterns.
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import List, Tuple
 from sqlalchemy.orm import Session
 import logging
 import random
+import argparse
+import sys
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +141,8 @@ class SyntheticDataGenerator:
     def generate_synthetic_transactions(
         n_transactions: int = 50000,
         fraud_rate: float = 0.07,
-        n_customers: int = 1000
+        n_customers: int = 1000,
+        days: int = 30,
     ) -> pd.DataFrame:
         """
         Generate synthetic transaction dataset.
@@ -148,10 +151,20 @@ class SyntheticDataGenerator:
             n_transactions: Total number of transactions to generate
             fraud_rate: Fraction of fraudulent transactions (0.07 = 7%)
             n_customers: Number of unique customers
+            days: Date range ending today to generate transactions within
         
         Returns:
             DataFrame with synthetic transactions
         """
+        if n_transactions < 1:
+            raise ValueError("n_transactions must be at least 1")
+        if not 0 <= fraud_rate <= 1:
+            raise ValueError("fraud_rate must be between 0 and 1")
+        if n_customers < 1:
+            raise ValueError("n_customers must be at least 1")
+        if days < 1:
+            raise ValueError("days must be at least 1")
+
         logger.info(f"Generating {n_transactions} synthetic transactions ({fraud_rate*100:.1f}% fraud rate)...")
         
         # Generate customer profiles
@@ -164,7 +177,9 @@ class SyntheticDataGenerator:
             }
         
         transactions = []
-        base_date = datetime(2023, 1, 1)
+        date_range_days = days - 1
+        base_date = datetime.now() - timedelta(days=date_range_days)
+        run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
         
         n_fraud = int(n_transactions * fraud_rate)
         n_legitimate = n_transactions - n_fraud
@@ -175,13 +190,13 @@ class SyntheticDataGenerator:
                 logger.info(f"Generated {i} legitimate transactions...")
             
             customer_id = random.randint(1, n_customers)
-            days_offset = random.randint(0, 365)
+            days_offset = random.randint(0, date_range_days)
             transaction_time = base_date + timedelta(days=days_offset)
             
             transaction = SyntheticDataGenerator.generate_legitimate_transaction(
                 customer_id, transaction_time, customer_profiles[customer_id]
             )
-            transaction['transaction_id'] = f"TXN_LEGIT_{i:08d}"
+            transaction['transaction_id'] = f"TXN_LEGIT_{run_id}_{i:08d}"
             transaction['merchant_name'] = f"Merchant_{random.randint(1, 5000)}"
             transaction['merchant_id'] = f"M{random.randint(10000, 99999)}"
             transaction['is_synthetic'] = True
@@ -194,13 +209,13 @@ class SyntheticDataGenerator:
                 logger.info(f"Generated {i} fraudulent transactions...")
             
             customer_id = random.randint(1, n_customers)
-            days_offset = random.randint(0, 365)
+            days_offset = random.randint(0, date_range_days)
             transaction_time = base_date + timedelta(days=days_offset)
             
             transaction = SyntheticDataGenerator.generate_fraud_transaction(
                 customer_id, transaction_time, customer_profiles[customer_id]
             )
-            transaction['transaction_id'] = f"TXN_FRAUD_{i:08d}"
+            transaction['transaction_id'] = f"TXN_FRAUD_{run_id}_{i:08d}"
             transaction['merchant_name'] = f"Suspicious_Merchant_{random.randint(1, 5000)}"
             transaction['merchant_id'] = f"M_FRAUD{random.randint(10000, 99999)}"
             transaction['is_synthetic'] = True
@@ -232,23 +247,31 @@ class SyntheticDataGenerator:
         Returns:
             Number of transactions inserted
         """
-        from app.models import Transaction, Customer
+        from app.models import Customer, FraudAssessment, Transaction
+        from app.services.fraud_engine import FraudEngine
         
         logger.info(f"Inserting {len(df)} transactions into database...")
         
-        # Ensure all customers exist
+        # Ensure generated customers exist and map generated IDs to database IDs.
         unique_customers = df['customer_id'].unique()
+        customer_id_map = {}
         for cid in unique_customers:
-            customer = session.query(Customer).filter(Customer.id == cid).first()
+            external_customer_id = f"SYNTH-CUST-{int(cid):06d}"
+            customer = session.query(Customer).filter(
+                Customer.customer_id == external_customer_id
+            ).first()
             if not customer:
                 customer = Customer(
-                    id=cid,
+                    customer_id=external_customer_id,
                     name=f"Customer_{cid}",
                     email=f"customer_{cid}@example.com",
                     phone=f"+1-555-{random.randint(1000, 9999):04d}",
-                    status='active'
+                    country="US",
+                    city=f"City_{int(cid) % 50}",
                 )
                 session.add(customer)
+                session.flush()
+            customer_id_map[int(cid)] = customer.id
         
         session.commit()
         
@@ -259,7 +282,7 @@ class SyntheticDataGenerator:
             for _, row in batch.iterrows():
                 transaction = Transaction(
                     transaction_id=row['transaction_id'],
-                    customer_id=int(row['customer_id']),
+                    customer_id=customer_id_map[int(row['customer_id'])],
                     transaction_date=row['transaction_date'],
                     amount=row['amount'],
                     currency='USD',
@@ -277,6 +300,20 @@ class SyntheticDataGenerator:
                     fraud_label=bool(row['fraud_label']),
                 )
                 session.add(transaction)
+                session.flush()
+
+                risk_score, risk_level, triggered_rules = (
+                    FraudEngine.evaluate_transaction(session, transaction)
+                )
+                session.add(
+                    FraudAssessment(
+                        transaction_id=transaction.id,
+                        risk_score=risk_score,
+                        risk_category=risk_level,
+                        rules_triggered_count=len(triggered_rules),
+                        explanation="Scored by the configured fraud rule engine.",
+                    )
+                )
             
             session.commit()
             logger.info(f"Inserted {min(i + batch_size, len(df))}/{len(df)} transactions")
@@ -287,16 +324,24 @@ class SyntheticDataGenerator:
 
 def main():
     """Generate and insert synthetic data."""
-    from app.db.database import SessionLocal
-    
-    session = SessionLocal()
+    parser = argparse.ArgumentParser(description="Generate synthetic transaction data")
+    parser.add_argument("--n-transactions", type=int, default=500)
+    parser.add_argument("--fraud-rate", type=float, default=0.07)
+    parser.add_argument("--n-customers", type=int, default=100)
+    parser.add_argument("--days", type=int, default=30)
+    args = parser.parse_args()
+
+    from app.db.database import get_session_factory
+
+    session = get_session_factory()()
     
     try:
         # Generate synthetic data
         df = SyntheticDataGenerator.generate_synthetic_transactions(
-            n_transactions=50000,
-            fraud_rate=0.07,
-            n_customers=1000
+            n_transactions=args.n_transactions,
+            fraud_rate=args.fraud_rate,
+            n_customers=args.n_customers,
+            days=args.days,
         )
         
         # Insert into database
@@ -309,8 +354,7 @@ def main():
 
 
 if __name__ == '__main__':
-    import sys
-    sys.path.insert(0, str(__file__).rsplit('\\', 3)[0])
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     
     logging.basicConfig(level=logging.INFO)
     main()
