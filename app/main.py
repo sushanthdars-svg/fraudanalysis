@@ -53,6 +53,7 @@ async def health_check():
 app.include_router(auth.router)
 app.include_router(auth.router, prefix="/api")
 app.include_router(transactions.router)
+app.include_router(transactions.router, prefix="/api")
 app.include_router(fraud_rules.router)
 app.include_router(fraud_assessment.router)
 app.include_router(alert_management.router)
