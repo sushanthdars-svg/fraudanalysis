@@ -40,6 +40,10 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy application code
 COPY . ./
 
+# Copy startup script before switching to non-root user
+COPY start_api.sh /tmp/start.sh
+RUN chmod +x /tmp/start.sh
+
 # Create non-root user with specific UID
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
@@ -60,5 +64,5 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     ENVIRONMENT=production
 
-# Run FastAPI application with Uvicorn
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+# Run startup script
+CMD ["/bin/bash", "/tmp/start.sh"]

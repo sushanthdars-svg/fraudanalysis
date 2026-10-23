@@ -56,7 +56,12 @@ services:
       dockerfile: Dockerfile.api
     container_name: fraud_detection_api
     environment:
-      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-fraud_user}:${MYSQL_PASSWORD:-fraud_password}@mysql:3306/${MYSQL_DATABASE:-fraud_detection}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
       API_HOST: 0.0.0.0
