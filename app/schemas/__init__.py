@@ -10,15 +10,6 @@ from app.core.permissions import UserRole
 import re
 
 
-# Email validation that supports .local domains
-def validate_email(email: str) -> str:
-    """Validate email format, supporting .local domains for development."""
-    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z0-9.-]+$'
-    if not re.match(pattern, email):
-        raise ValueError('Invalid email format')
-    return email
-
-
 # ============= User Schemas =============
 
 class UserCreate(BaseModel):
@@ -28,9 +19,16 @@ class UserCreate(BaseModel):
     password: str = Field(..., min_length=8, description="User password (minimum 8 characters)")
     role: UserRole = Field(default=UserRole.ANALYST, description="User role")
     
-    @field_validator('email')
+    @field_validator('email', mode='before')
+    @classmethod
     def validate_email_field(cls, v):
-        return validate_email(v)
+        """Validate email format, supporting .local domains."""
+        if not isinstance(v, str):
+            raise ValueError('Email must be a string')
+        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z0-9.-]+$'
+        if not re.match(pattern, v):
+            raise ValueError('Invalid email format')
+        return v.lower()
 
 
 class UserUpdate(BaseModel):
@@ -60,9 +58,16 @@ class LoginRequest(BaseModel):
     email: str = Field(..., description="User email")
     password: str = Field(..., description="User password")
     
-    @field_validator('email')
+    @field_validator('email', mode='before')
+    @classmethod
     def validate_email_field(cls, v):
-        return validate_email(v)
+        """Validate email format, supporting .local domains."""
+        if not isinstance(v, str):
+            raise ValueError('Email must be a string')
+        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z0-9.-]+$'
+        if not re.match(pattern, v):
+            raise ValueError('Invalid email format')
+        return v.lower()
 
 
 class UserRegistrationRequest(BaseModel):
@@ -71,9 +76,16 @@ class UserRegistrationRequest(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=255)
     password: str = Field(..., min_length=8, max_length=128)
     
-    @field_validator('email')
+    @field_validator('email', mode='before')
+    @classmethod
     def validate_email_field(cls, v):
-        return validate_email(v)
+        """Validate email format, supporting .local domains."""
+        if not isinstance(v, str):
+            raise ValueError('Email must be a string')
+        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z0-9.-]+$'
+        if not re.match(pattern, v):
+            raise ValueError('Invalid email format')
+        return v.lower()
 
     model_config = {"extra": "forbid"}
 
