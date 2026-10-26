@@ -720,3 +720,289 @@ class AnalyticsService:
             "under_review_alerts": alert_stats["under_review_alerts"],
             "risk_distribution": risk_dist,
         }
+
+    @staticmethod
+    def get_merchant_category_analysis(
+        session: Session,
+        days: int = 30
+    ) -> List[Dict[str, Any]]:
+        """Get transaction volume and risk by merchant category."""
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        transactions = session.query(Transaction).filter(
+            Transaction.transaction_date >= cutoff_date
+        ).all()
+        
+        category_data = {}
+        for txn in transactions:
+            category = txn.merchant_category or "Unknown"
+            if category not in category_data:
+                category_data[category] = {
+                    "category": category,
+                    "transaction_count": 0,
+                    "total_volume": Decimal("0"),
+                    "high_risk_count": 0,
+                    "total_risk_score": 0,
+                }
+            
+            category_data[category]["transaction_count"] += 1
+            category_data[category]["total_volume"] += txn.amount
+            
+            assessment = session.query(FraudAssessment).filter(
+                FraudAssessment.transaction_id == txn.id
+            ).first()
+            if assessment:
+                category_data[category]["total_risk_score"] += assessment.risk_score
+                if assessment.risk_category.upper() == "HIGH":
+                    category_data[category]["high_risk_count"] += 1
+        
+        result = []
+        for cat_data in category_data.values():
+            count = cat_data["transaction_count"]
+            avg_risk = cat_data["total_risk_score"] / count if count > 0 else 0
+            result.append({
+                "category": cat_data["category"],
+                "transaction_count": count,
+                "total_volume": float(cat_data["total_volume"]),
+                "average_risk_score": avg_risk,
+            })
+        
+        return sorted(result, key=lambda x: x["transaction_count"], reverse=True)
+
+    @staticmethod
+    def get_transaction_type_analysis(
+        session: Session,
+        days: int = 30
+    ) -> List[Dict[str, Any]]:
+        """Get transaction breakdown by type."""
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        transactions = session.query(Transaction).filter(
+            Transaction.transaction_date >= cutoff_date
+        ).all()
+        
+        type_data = {}
+        for txn in transactions:
+            txn_type = txn.transaction_type or "unknown"
+            if txn_type not in type_data:
+                type_data[txn_type] = {
+                    "transaction_type": txn_type,
+                    "count": 0,
+                    "volume": Decimal("0"),
+                    "high_risk_count": 0,
+                    "total_risk_score": 0,
+                }
+            
+            type_data[txn_type]["count"] += 1
+            type_data[txn_type]["volume"] += txn.amount
+            
+            assessment = session.query(FraudAssessment).filter(
+                FraudAssessment.transaction_id == txn.id
+            ).first()
+            if assessment:
+                type_data[txn_type]["total_risk_score"] += assessment.risk_score
+                if assessment.risk_category.upper() == "HIGH":
+                    type_data[txn_type]["high_risk_count"] += 1
+        
+        result = []
+        for t_data in type_data.values():
+            count = t_data["count"]
+            avg_risk = t_data["total_risk_score"] / count if count > 0 else 0
+            result.append({
+                "transaction_type": t_data["transaction_type"],
+                "count": count,
+                "volume": float(t_data["volume"]),
+                "high_risk_count": t_data["high_risk_count"],
+                "average_risk_score": avg_risk,
+            })
+        
+        return sorted(result, key=lambda x: x["count"], reverse=True)
+
+    @staticmethod
+    def get_payment_method_analysis(
+        session: Session,
+        days: int = 30
+    ) -> List[Dict[str, Any]]:
+        """Get payment method distribution and fraud rates."""
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        transactions = session.query(Transaction).filter(
+            Transaction.transaction_date >= cutoff_date
+        ).all()
+        
+        method_data = {}
+        for txn in transactions:
+            method = txn.payment_method or "unknown"
+            if method not in method_data:
+                method_data[method] = {
+                    "payment_method": method,
+                    "count": 0,
+                    "volume": Decimal("0"),
+                    "high_risk_count": 0,
+                }
+            
+            method_data[method]["count"] += 1
+            method_data[method]["volume"] += txn.amount
+            
+            assessment = session.query(FraudAssessment).filter(
+                FraudAssessment.transaction_id == txn.id
+            ).first()
+            if assessment and assessment.risk_category.upper() == "HIGH":
+                method_data[method]["high_risk_count"] += 1
+        
+        result = []
+        for m_data in method_data.values():
+            count = m_data["count"]
+            high_risk = m_data["high_risk_count"]
+            fraud_rate = (high_risk / count * 100) if count > 0 else 0
+            result.append({
+                "payment_method": m_data["payment_method"],
+                "count": count,
+                "volume": float(m_data["volume"]),
+                "high_risk_count": high_risk,
+                "fraud_rate": fraud_rate,
+            })
+        
+        return sorted(result, key=lambda x: x["count"], reverse=True)
+
+    @staticmethod
+    def get_geographic_analysis(
+        session: Session,
+        days: int = 30
+    ) -> List[Dict[str, Any]]:
+        """Get transaction data by geographic location."""
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        transactions = session.query(Transaction).filter(
+            Transaction.transaction_date >= cutoff_date
+        ).all()
+        
+        geo_data = {}
+        for txn in transactions:
+            country = txn.location_country or "Unknown"
+            city = txn.location_city or "Unknown"
+            key = f"{country}|{city}"
+            
+            if key not in geo_data:
+                geo_data[key] = {
+                    "country": country,
+                    "city": city,
+                    "transaction_count": 0,
+                    "total_volume": Decimal("0"),
+                    "high_risk_count": 0,
+                    "total_risk_score": 0,
+                }
+            
+            geo_data[key]["transaction_count"] += 1
+            geo_data[key]["total_volume"] += txn.amount
+            
+            assessment = session.query(FraudAssessment).filter(
+                FraudAssessment.transaction_id == txn.id
+            ).first()
+            if assessment:
+                geo_data[key]["total_risk_score"] += assessment.risk_score
+                if assessment.risk_category.upper() == "HIGH":
+                    geo_data[key]["high_risk_count"] += 1
+        
+        result = []
+        for g_data in geo_data.values():
+            count = g_data["transaction_count"]
+            avg_risk = g_data["total_risk_score"] / count if count > 0 else 0
+            result.append({
+                "country": g_data["country"],
+                "city": g_data["city"],
+                "transaction_count": count,
+                "total_volume": float(g_data["total_volume"]),
+                "high_risk_count": g_data["high_risk_count"],
+                "average_risk_score": avg_risk,
+            })
+        
+        return sorted(result, key=lambda x: x["transaction_count"], reverse=True)
+
+    @staticmethod
+    def get_channel_analysis(
+        session: Session,
+        days: int = 30
+    ) -> List[Dict[str, Any]]:
+        """Get transaction volume and fraud by channel."""
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        transactions = session.query(Transaction).filter(
+            Transaction.transaction_date >= cutoff_date
+        ).all()
+        
+        channel_data = {}
+        for txn in transactions:
+            channel = txn.channel or "unknown"
+            if channel not in channel_data:
+                channel_data[channel] = {
+                    "channel": channel,
+                    "count": 0,
+                    "volume": Decimal("0"),
+                    "high_risk_count": 0,
+                }
+            
+            channel_data[channel]["count"] += 1
+            channel_data[channel]["volume"] += txn.amount
+            
+            assessment = session.query(FraudAssessment).filter(
+                FraudAssessment.transaction_id == txn.id
+            ).first()
+            if assessment and assessment.risk_category.upper() == "HIGH":
+                channel_data[channel]["high_risk_count"] += 1
+        
+        result = []
+        for c_data in channel_data.values():
+            count = c_data["count"]
+            high_risk = c_data["high_risk_count"]
+            fraud_rate = (high_risk / count * 100) if count > 0 else 0
+            result.append({
+                "channel": c_data["channel"],
+                "count": count,
+                "volume": float(c_data["volume"]),
+                "high_risk_count": high_risk,
+                "fraud_rate": fraud_rate,
+            })
+        
+        return sorted(result, key=lambda x: x["count"], reverse=True)
+
+    @staticmethod
+    def get_risk_score_distribution(
+        session: Session,
+        days: int = 30
+    ) -> List[Dict[str, Any]]:
+        """Get risk score distribution histogram data."""
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        assessments = session.query(FraudAssessment).join(
+            Transaction
+        ).filter(
+            Transaction.transaction_date >= cutoff_date
+        ).all()
+        
+        # Create buckets: 0-10, 10-20, ..., 90-100
+        buckets = {
+            "0-10": 0,
+            "10-20": 0,
+            "20-30": 0,
+            "30-40": 0,
+            "40-50": 0,
+            "50-60": 0,
+            "60-70": 0,
+            "70-80": 0,
+            "80-90": 0,
+            "90-100": 0,
+        }
+        
+        for assessment in assessments:
+            score = int(assessment.risk_score)
+            bucket_idx = min(score // 10, 9)
+            bucket_key = f"{bucket_idx * 10}-{(bucket_idx + 1) * 10}"
+            if bucket_key in buckets:
+                buckets[bucket_key] += 1
+        
+        total = sum(buckets.values())
+        result = []
+        for bucket_name, count in buckets.items():
+            percentage = (count / total * 100) if total > 0 else 0
+            result.append({
+                "risk_score_bucket": bucket_name,
+                "count": count,
+                "percentage": percentage,
+            })
+        
+        return result

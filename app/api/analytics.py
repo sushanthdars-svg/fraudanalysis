@@ -107,6 +107,52 @@ class FraudMetricsResponse(BaseModel):
     overall_fraud_rate: float
 
 
+class MerchantCategoryResponse(BaseModel):
+    category: str
+    transaction_count: int
+    total_volume: float
+    average_risk_score: float
+
+
+class TransactionTypeResponse(BaseModel):
+    transaction_type: str
+    count: int
+    volume: float
+    high_risk_count: int
+    average_risk_score: float
+
+
+class PaymentMethodResponse(BaseModel):
+    payment_method: str
+    count: int
+    volume: float
+    high_risk_count: int
+    fraud_rate: float
+
+
+class GeographicDataResponse(BaseModel):
+    country: str
+    city: Optional[str]
+    transaction_count: int
+    total_volume: float
+    high_risk_count: int
+    average_risk_score: float
+
+
+class ChannelAnalysisResponse(BaseModel):
+    channel: str
+    count: int
+    volume: float
+    high_risk_count: int
+    fraud_rate: float
+
+
+class RiskScoreDistributionResponse(BaseModel):
+    risk_score_bucket: str
+    count: int
+    percentage: float
+
+
 @router.get("/health", status_code=200)
 async def analytics_health():
     """Health check for analytics service."""
@@ -374,4 +420,136 @@ async def export_analytics(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error exporting analytics data"
+        )
+
+
+@router.get("/merchant-categories")
+async def get_merchant_categories(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """
+    Get transaction volume and risk by merchant category.
+    
+    Returns data for merchant category bar chart.
+    """
+    try:
+        categories = AnalyticsService.get_merchant_category_analysis(db, days=days)
+        return [MerchantCategoryResponse(**c).dict() for c in categories]
+    except Exception as e:
+        logger.error(f"Error getting merchant categories: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error retrieving merchant category data"
+        )
+
+
+@router.get("/transaction-types")
+async def get_transaction_types(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """
+    Get transaction breakdown by type (purchase, withdrawal, transfer, etc).
+    
+    Returns data for transaction type pie/bar chart.
+    """
+    try:
+        types = AnalyticsService.get_transaction_type_analysis(db, days=days)
+        return [TransactionTypeResponse(**t).dict() for t in types]
+    except Exception as e:
+        logger.error(f"Error getting transaction types: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error retrieving transaction type data"
+        )
+
+
+@router.get("/payment-methods")
+async def get_payment_methods(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """
+    Get payment method distribution and fraud rates.
+    
+    Returns data for payment method bar/pie chart.
+    """
+    try:
+        methods = AnalyticsService.get_payment_method_analysis(db, days=days)
+        return [PaymentMethodResponse(**m).dict() for m in methods]
+    except Exception as e:
+        logger.error(f"Error getting payment methods: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error retrieving payment method data"
+        )
+
+
+@router.get("/geographic")
+async def get_geographic_data(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """
+    Get transaction data by geographic location (country/city).
+    
+    Returns data for geographic heatmap and distribution charts.
+    """
+    try:
+        locations = AnalyticsService.get_geographic_analysis(db, days=days)
+        return [GeographicDataResponse(**loc).dict() for loc in locations]
+    except Exception as e:
+        logger.error(f"Error getting geographic data: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error retrieving geographic data"
+        )
+
+
+@router.get("/channel-analysis")
+async def get_channel_analysis(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """
+    Get transaction volume and fraud by channel (online, atm, pos, phone, etc).
+    
+    Returns data for channel comparison charts.
+    """
+    try:
+        channels = AnalyticsService.get_channel_analysis(db, days=days)
+        return [ChannelAnalysisResponse(**c).dict() for c in channels]
+    except Exception as e:
+        logger.error(f"Error getting channel analysis: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error retrieving channel data"
+        )
+
+
+@router.get("/risk-distribution")
+async def get_risk_distribution(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    """
+    Get risk score distribution histogram data.
+    
+    Returns bucketed risk scores for histogram visualization.
+    """
+    try:
+        distribution = AnalyticsService.get_risk_score_distribution(db, days=days)
+        return [RiskScoreDistributionResponse(**d).dict() for d in distribution]
+    except Exception as e:
+        logger.error(f"Error getting risk distribution: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error retrieving risk distribution data"
         )

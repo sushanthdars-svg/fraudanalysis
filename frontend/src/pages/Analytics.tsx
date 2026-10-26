@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, ArrowUpRight, ChartNoAxesCombined, CreditCard, DollarSign, RefreshCw, ShieldAlert, Users } from "lucide-react";
-import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, BarChart, Bar, CartesianGrid, Cell, LineChart, Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend } from "recharts";
 import { count, money, percent, useResource } from "../api";
 import { Badge, DataTable, Heading, Metric, Panel, Status } from "../components";
 import type { CustomerRisk, Overview, TransactionStats, Trend, User } from "../types";
@@ -26,6 +26,152 @@ function RiskDistribution({ stats }: { stats: TransactionStats }) {
     <div className="legend">{distribution.map((item) => <div key={item.name}><span><i style={{ backgroundColor: item.color }} />{item.name}</span><strong>{count(item.value)}</strong><small>{stats.total_transactions ? percent(item.value / stats.total_transactions) : "0.0%"}</small></div>)}</div>
   </Panel>;
 }
+
+function TransactionTypeChart({ days }: { days: number }) {
+  const resource = useResource<any[]>(`/api/analytics/transaction-types?days=${days}`);
+  return <Panel title="Transaction type breakdown" description={`Distribution of transaction types over the last ${days} days`}>
+    <Status {...resource} retry={resource.refresh} />
+    {resource.data && resource.data.length ? (
+      <div className="chart">
+        <ResponsiveContainer width="100%" height={300}>
+          <BarChart data={resource.data} margin={{ top: 15, right: 15, left: 0, bottom: 60 }}>
+            <CartesianGrid strokeDasharray="4 5" vertical={false} stroke="#e8edf3" />
+            <XAxis dataKey="transaction_type" angle={-45} textAnchor="end" height={80} tick={{ fontSize: 11, fill: "#8290a4" }} />
+            <YAxis tick={{ fontSize: 11, fill: "#8290a4" }} axisLine={false} tickLine={false} />
+            <Tooltip contentStyle={{ borderRadius: 10, borderColor: "#e8edf3" }} />
+            <Legend />
+            <Bar dataKey="count" name="Count" fill="#159b82" />
+            <Bar dataKey="high_risk_count" name="High Risk" fill="#ec7583" />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    ) : <div className="state">No transaction type data available.</div>}
+  </Panel>;
+}
+
+function PaymentMethodChart({ days }: { days: number }) {
+  const resource = useResource<any[]>(`/api/analytics/payment-methods?days=${days}`);
+  return <Panel title="Payment method fraud analysis" description={`Fraud rates by payment method over the last ${days} days`}>
+    <Status {...resource} retry={resource.refresh} />
+    {resource.data && resource.data.length ? (
+      <div className="chart">
+        <ResponsiveContainer width="100%" height={250}>
+          <BarChart data={resource.data} margin={{ top: 15, right: 15, left: 0, bottom: 60 }}>
+            <CartesianGrid strokeDasharray="4 5" vertical={false} stroke="#e8edf3" />
+            <XAxis dataKey="payment_method" angle={-45} textAnchor="end" height={80} tick={{ fontSize: 11, fill: "#8290a4" }} />
+            <YAxis tick={{ fontSize: 11, fill: "#8290a4" }} axisLine={false} tickLine={false} />
+            <Tooltip formatter={(value) => `${Number(value).toFixed(1)}%`} contentStyle={{ borderRadius: 10, borderColor: "#e8edf3" }} />
+            <Bar dataKey="fraud_rate" name="Fraud Rate %" fill="#ec7583" radius={[8, 8, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    ) : <div className="state">No payment method data available.</div>}
+  </Panel>;
+}
+
+function MerchantCategoryChart({ days }: { days: number }) {
+  const resource = useResource<any[]>(`/api/analytics/merchant-categories?days=${days}`);
+  return <Panel title="Transaction volume by merchant category" description={`Top merchant categories over the last ${days} days`}>
+    <Status {...resource} retry={resource.refresh} />
+    {resource.data && resource.data.length ? (
+      <div className="chart">
+        <ResponsiveContainer width="100%" height={300}>
+          <BarChart data={resource.data} margin={{ top: 15, right: 15, left: 0, bottom: 60 }} layout="vertical">
+            <CartesianGrid strokeDasharray="4 5" horizontal={false} stroke="#e8edf3" />
+            <XAxis type="number" tick={{ fontSize: 11, fill: "#8290a4" }} />
+            <YAxis dataKey="category" type="category" width={150} tick={{ fontSize: 11, fill: "#8290a4" }} />
+            <Tooltip formatter={(value) => money(Number(value))} contentStyle={{ borderRadius: 10, borderColor: "#e8edf3" }} />
+            <Bar dataKey="total_volume" name="Volume" fill="#159b82" />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    ) : <div className="state">No merchant category data available.</div>}
+  </Panel>;
+}
+
+function ChannelAnalysisChart({ days }: { days: number }) {
+  const resource = useResource<any[]>(`/api/analytics/channel-analysis?days=${days}`);
+  return <Panel title="Channel comparison" description={`Transaction volume and fraud by channel over the last ${days} days`}>
+    <Status {...resource} retry={resource.refresh} />
+    {resource.data && resource.data.length ? (
+      <div className="chart">
+        <ResponsiveContainer width="100%" height={300}>
+          <BarChart data={resource.data} margin={{ top: 15, right: 15, left: 0, bottom: 60 }}>
+            <CartesianGrid strokeDasharray="4 5" vertical={false} stroke="#e8edf3" />
+            <XAxis dataKey="channel" angle={-45} textAnchor="end" height={80} tick={{ fontSize: 11, fill: "#8290a4" }} />
+            <YAxis yAxisId="left" tick={{ fontSize: 11, fill: "#8290a4" }} axisLine={false} tickLine={false} />
+            <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: "#8290a4" }} axisLine={false} tickLine={false} />
+            <Tooltip contentStyle={{ borderRadius: 10, borderColor: "#e8edf3" }} />
+            <Legend />
+            <Bar yAxisId="left" dataKey="count" name="Count" fill="#159b82" />
+            <Bar yAxisId="right" dataKey="fraud_rate" name="Fraud Rate %" fill="#ec7583" />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    ) : <div className="state">No channel data available.</div>}
+  </Panel>;
+}
+
+function RiskScoreDistributionChart({ days }: { days: number }) {
+  const resource = useResource<any[]>(`/api/analytics/risk-distribution?days=${days}`);
+  return <Panel title="Risk score distribution" description={`Histogram of risk scores over the last ${days} days`}>
+    <Status {...resource} retry={resource.refresh} />
+    {resource.data && resource.data.length ? (
+      <div className="chart">
+        <ResponsiveContainer width="100%" height={280}>
+          <BarChart data={resource.data} margin={{ top: 15, right: 15, left: 0, bottom: 60 }}>
+            <CartesianGrid strokeDasharray="4 5" vertical={false} stroke="#e8edf3" />
+            <XAxis dataKey="risk_score_bucket" tick={{ fontSize: 11, fill: "#8290a4" }} />
+            <YAxis yAxisId="left" tick={{ fontSize: 11, fill: "#8290a4" }} axisLine={false} tickLine={false} />
+            <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: "#8290a4" }} axisLine={false} tickLine={false} />
+            <Tooltip contentStyle={{ borderRadius: 10, borderColor: "#e8edf3" }} />
+            <Legend />
+            <Bar yAxisId="left" dataKey="count" name="Count" fill="#159b82" radius={[8, 8, 0, 0]} />
+            <Bar yAxisId="right" dataKey="percentage" name="%" fill="#edb04c" radius={[8, 8, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    ) : <div className="state">No risk distribution data available.</div>}
+  </Panel>;
+}
+
+function GeographicAnalysisChart({ days }: { days: number }) {
+  const resource = useResource<any[]>(`/api/analytics/geographic?days=${days}`);
+  return <Panel title="Geographic distribution" description={`Transaction hotspots by country/city over the last ${days} days`}>
+    <Status {...resource} retry={resource.refresh} />
+    {resource.data && resource.data.length ? (
+      <div className="chart">
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #e8edf3" }}>
+                <th style={{ padding: "12px", textAlign: "left", fontSize: "12px", fontWeight: 600, color: "#5a6b7a" }}>Country</th>
+                <th style={{ padding: "12px", textAlign: "left", fontSize: "12px", fontWeight: 600, color: "#5a6b7a" }}>City</th>
+                <th style={{ padding: "12px", textAlign: "right", fontSize: "12px", fontWeight: 600, color: "#5a6b7a" }}>Transactions</th>
+                <th style={{ padding: "12px", textAlign: "right", fontSize: "12px", fontWeight: 600, color: "#5a6b7a" }}>Volume</th>
+                <th style={{ padding: "12px", textAlign: "right", fontSize: "12px", fontWeight: 600, color: "#5a6b7a" }}>High Risk</th>
+                <th style={{ padding: "12px", textAlign: "right", fontSize: "12px", fontWeight: 600, color: "#5a6b7a" }}>Avg Risk Score</th>
+              </tr>
+            </thead>
+            <tbody>
+              {resource.data.slice(0, 10).map((row: any, idx: number) => (
+                <tr key={idx} style={{ borderBottom: "1px solid #f0f3f7" }}>
+                  <td style={{ padding: "12px", fontSize: "13px" }}><strong>{row.country}</strong></td>
+                  <td style={{ padding: "12px", fontSize: "13px" }}>{row.city}</td>
+                  <td style={{ padding: "12px", textAlign: "right", fontSize: "13px" }}>{row.transaction_count}</td>
+                  <td style={{ padding: "12px", textAlign: "right", fontSize: "13px" }}>{money(row.total_volume)}</td>
+                  <td style={{ padding: "12px", textAlign: "right", fontSize: "13px", color: row.high_risk_count > 0 ? "#ec7583" : "#8290a4" }}><strong>{row.high_risk_count}</strong></td>
+                  <td style={{ padding: "12px", textAlign: "right", fontSize: "13px" }}>{row.average_risk_score.toFixed(1)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    ) : <div className="state">No geographic data available.</div>}
+  </Panel>;
+}
+
 
 export function OverviewPage({ user }: { user: User }) {
   const resource = useResource<Overview>("/api/analytics/dashboard");
@@ -59,7 +205,13 @@ export function RiskPage() {
   return <>
     <Heading eyebrow="CONNECT THE SIGNALS" title="Risk analytics" description="Understand exposure, customer behavior, and emerging anomalies."><label className="inline-label">Period<select value={days} onChange={(event) => setDays(Number(event.target.value))}><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option></select></label></Heading>
     <Status {...stats} retry={stats.refresh} />
-    {stats.data && <><div className="metrics-grid"><Metric title="Total volume" value={money(stats.data.total_volume)} note={`Last ${days} days`} icon={<DollarSign size={18} />} /><Metric title="Average amount" value={money(stats.data.average_amount)} note="Per transaction" icon={<CreditCard size={18} />} /><Metric title="High risk" value={count(stats.data.high_risk_transactions)} note="Assessed high-risk transactions" icon={<ShieldAlert size={18} />} /><Metric title="Low risk" value={count(stats.data.low_risk_transactions)} note="Assessed low-risk transactions" icon={<ChartNoAxesCombined size={18} />} /></div><div className="chart-grid"><Trends days={days} /><RiskDistribution stats={stats.data} /></div></>}
+    {stats.data && <><div className="metrics-grid"><Metric title="Total volume" value={money(stats.data.total_volume)} note={`Last ${days} days`} icon={<DollarSign size={18} />} /><Metric title="Average amount" value={money(stats.data.average_amount)} note="Per transaction" icon={<CreditCard size={18} />} /><Metric title="High risk" value={count(stats.data.high_risk_transactions)} note="Assessed high-risk transactions" icon={<ShieldAlert size={18} />} /><Metric title="Low risk" value={count(stats.data.low_risk_transactions)} note="Assessed low-risk transactions" icon={<ChartNoAxesCombined size={18} />} /></div>
+    <div className="chart-grid"><Trends days={days} /><RiskDistribution stats={stats.data} /></div>
+    <div className="chart-grid"><TransactionTypeChart days={days} /><PaymentMethodChart days={days} /></div>
+    <div className="chart-grid"><MerchantCategoryChart days={days} /><ChannelAnalysisChart days={days} /></div>
+    <RiskScoreDistributionChart days={days} />
+    <GeographicAnalysisChart days={days} />
+    </>}
     <Panel title="Customer risk profiles" description="Top profiles returned by the risk service (all-time customer history)">
       <Status {...customers} retry={customers.refresh} />{customers.data && <DataTable rows={customers.data.high_risk_customers} rowKey={(row) => row.customer_id} columns={[
         { title: "Customer", cell: (row) => <strong>Customer #{row.customer_id}</strong> },
